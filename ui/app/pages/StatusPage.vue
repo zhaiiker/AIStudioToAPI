@@ -2739,95 +2739,96 @@
                     </button>
                 </header>
 
-                <div class="stats-grid" style="margin-bottom:24px">
-                    <div class="stat-card">
-                        <div class="stat-label">Available Accounts</div>
-                        <div class="stat-value" style="color:var(--success-color)">
-                            {{ geminiWebAccounts.filter(a => a.geminiWebAvailable).length }}
-                            / {{ geminiWebAccounts.length }}
+                <div class="stats-dashboard-grid" style="margin-bottom: 24px">
+                    <section class="status-card summary-card-visual">
+                        <div class="stat-icon-wrapper" style="background: var(--primary-light, rgba(59,130,246,0.1)); color: var(--primary-color, #3b82f6)">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>
                         </div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="stat-label">Supported Models</div>
-                        <div class="stat-value">{{ geminiWebModelCount }}</div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="stat-label">Image Store</div>
-                        <div class="stat-value" style="font-size:13px;color:var(--text-secondary)">
-                            /gemini-web/images/:id
+                        <div class="stat-info">
+                            <div class="stat-label-muted">Available Accounts</div>
+                            <div class="stat-value-large">
+                                <span class="status-running" style="margin-right: 4px;">{{ geminiWebAccounts.filter(a => a.geminiWebAvailable).length }}</span>
+                                <span style="font-size: 14px; color: var(--text-secondary);">/ {{ geminiWebAccounts.length }}</span>
+                            </div>
                         </div>
-                    </div>
+                    </section>
+                    <section class="status-card summary-card-visual">
+                        <div class="stat-icon-wrapper" style="background: var(--purple-light, rgba(168,85,247,0.1)); color: var(--purple-color, #a855f7)">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 14 4-4"></path><path d="M3.34 19a10 10 0 1 1 17.32 0"></path></svg>
+                        </div>
+                        <div class="stat-info">
+                            <div class="stat-label-muted">Supported Models</div>
+                            <div class="stat-value-large">{{ geminiWebModelCount }}</div>
+                        </div>
+                    </section>
+                    <section class="status-card summary-card-visual">
+                        <div class="stat-icon-wrapper" style="background: var(--warning-light, rgba(245,158,11,0.1)); color: var(--warning-color, #f59e0b)">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2" ry="2"></rect><circle cx="9" cy="9" r="2"></circle><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"></path></svg>
+                        </div>
+                        <div class="stat-info">
+                            <div class="stat-label-muted">Image Store</div>
+                            <div class="stat-value-large" style="font-size: 14px; margin-top: 8px; font-weight: normal; font-family: monospace;">/gemini-web/images/:id</div>
+                        </div>
+                    </section>
                 </div>
 
                 <!-- Account status table -->
-                <section class="info-card" style="padding:0;overflow:hidden">
-                    <div style="padding:16px 20px;border-bottom:1px solid var(--border-light);font-weight:600">
-                        Account Status
+                <section class="status-card records-card" style="margin-bottom: 24px">
+                    <div class="card-header-v2">
+                        <h3 class="card-title-usage">Account Status</h3>
                     </div>
-                    <div v-if="geminiWebAccounts.length === 0" style="padding:32px;text-align:center;color:var(--text-secondary)">
+                    <div v-if="geminiWebAccounts.length === 0" class="empty-state">
                         No browser contexts initialized yet.
                     </div>
-                    <table v-else style="width:100%;border-collapse:collapse">
-                        <thead>
-                            <tr style="background:var(--bg-secondary)">
-                                <th style="padding:10px 16px;text-align:left;font-size:12px;color:var(--text-secondary);font-weight:500">#</th>
-                                <th style="padding:10px 16px;text-align:left;font-size:12px;color:var(--text-secondary);font-weight:500">Account</th>
-                                <th style="padding:10px 16px;text-align:left;font-size:12px;color:var(--text-secondary);font-weight:500">Gemini Web</th>
-                                <th style="padding:10px 16px;text-align:left;font-size:12px;color:var(--text-secondary);font-weight:500">Token Acquired</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            <tr
-                                v-for="acc in geminiWebAccounts"
-                                :key="acc.authIndex"
-                                style="border-top:1px solid var(--border-light)"
-                            >
-                                <td style="padding:10px 16px;font-size:13px">#{{ acc.authIndex }}</td>
-                                <td style="padding:10px 16px;font-size:13px;color:var(--text-secondary)">{{ acc.accountName || '—' }}</td>
-                                <td style="padding:10px 16px">
-                                    <span
-                                        v-if="acc.geminiWebAvailable"
-                                        style="display:inline-flex;align-items:center;gap:5px;padding:2px 10px;border-radius:12px;font-size:12px;background:var(--success-color-light,rgba(34,197,94,.15));color:var(--success-color,#22c55e);font-weight:500"
-                                    >
-                                        <span style="width:6px;height:6px;border-radius:50%;background:currentColor"></span>
-                                        Ready
-                                    </span>
-                                    <span
-                                        v-else-if="acc.hasGeminiWebToken"
-                                        style="display:inline-flex;align-items:center;gap:5px;padding:2px 10px;border-radius:12px;font-size:12px;background:rgba(234,179,8,.15);color:#eab308;font-weight:500"
-                                    >
-                                        <span style="width:6px;height:6px;border-radius:50%;background:currentColor"></span>
-                                        Tab Closed
-                                    </span>
-                                    <span
-                                        v-else
-                                        style="display:inline-flex;align-items:center;gap:5px;padding:2px 10px;border-radius:12px;font-size:12px;background:var(--bg-secondary);color:var(--text-secondary);font-weight:500"
-                                    >
-                                        <span style="width:6px;height:6px;border-radius:50%;background:currentColor"></span>
-                                        Not Available
-                                    </span>
-                                </td>
-                                <td style="padding:10px 16px;font-size:12px;color:var(--text-secondary)">
-                                    {{ acc.tokenRefreshedAt ? new Date(acc.tokenRefreshedAt).toLocaleString() : '—' }}
-                                </td>
-                            </tr>
-                        </tbody>
-                    </table>
+                    <div v-else class="table-scroll-wrapper records-scroll-wrapper" style="max-height: 400px">
+                        <table class="data-table fixed-header-table">
+                            <thead>
+                                <tr>
+                                    <th>#</th>
+                                    <th>Account</th>
+                                    <th>Gemini Web</th>
+                                    <th>Token Acquired</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr v-for="acc in geminiWebAccounts" :key="acc.authIndex">
+                                    <td class="mono truncate-cell" style="width: 60px">#{{ acc.authIndex }}</td>
+                                    <td>{{ acc.accountName || '—' }}</td>
+                                    <td>
+                                        <span v-if="acc.geminiWebAvailable" class="outcome-badge" style="color: var(--success-color, #22c55e); background: var(--success-color-light, rgba(34,197,94,0.15))">
+                                            Ready
+                                        </span>
+                                        <span v-else-if="acc.hasGeminiWebToken" class="outcome-badge" style="color: var(--warning-color, #f59e0b); background: var(--warning-light, rgba(245,158,11,0.15))">
+                                            Tab Closed
+                                        </span>
+                                        <span v-else class="outcome-badge" style="color: var(--text-secondary); background: var(--bg-secondary)">
+                                            Not Available
+                                        </span>
+                                    </td>
+                                    <td class="mono">{{ acc.tokenRefreshedAt ? new Date(acc.tokenRefreshedAt).toLocaleString() : '—' }}</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
                 </section>
 
                 <!-- Model list -->
-                <section class="info-card" style="margin-top:20px">
-                    <div style="font-weight:600;margin-bottom:14px">Supported Models (gemini-web/*)</div>
-                    <div style="display:flex;flex-wrap:wrap;gap:8px">
-                        <span
-                            v-for="m in geminiWebModels"
-                            :key="m"
-                            style="padding:4px 12px;border-radius:12px;font-size:12px;background:var(--bg-secondary);color:var(--text-primary);border:1px solid var(--border-light)"
-                        >{{ m }}</span>
+                <section class="status-card wide-card">
+                    <div class="card-header-v2" style="border-bottom: none; padding-bottom: 0;">
+                        <h3 class="card-title-usage">Supported Models (gemini-web/*)</h3>
                     </div>
-                    <div style="margin-top:16px;padding:12px;border-radius:8px;background:var(--bg-secondary);font-size:12px;color:var(--text-secondary)">
-                        <strong>Usage:</strong> Send OpenAI-compatible requests to <code style="background:var(--bg-card);padding:2px 6px;border-radius:4px">/v1/chat/completions</code> with <code style="background:var(--bg-card);padding:2px 6px;border-radius:4px">model: "gemini-web/gemini-3.6-flash"</code>.
-                        Requests are routed through the logged-in Google browser session — no API key required from Google.
+                    <div style="padding: 20px;">
+                        <div style="display: flex; flex-wrap: wrap; gap: 8px">
+                            <span
+                                v-for="m in geminiWebModels"
+                                :key="m"
+                                style="padding: 4px 12px; border-radius: 6px; font-size: 13px; font-family: monospace; background: var(--bg-secondary); color: var(--text-primary); border: 1px solid var(--border-light)"
+                            >{{ m }}</span>
+                        </div>
+                        <div style="margin-top: 20px; padding: 16px; border-radius: 8px; background: var(--bg-secondary); font-size: 13px; color: var(--text-secondary); line-height: 1.5">
+                            <strong style="color: var(--text-primary)">Usage:</strong> Send OpenAI-compatible requests to <code style="background:var(--bg-card);padding:2px 6px;border-radius:4px;border:1px solid var(--border-light)">/v1/chat/completions</code> with <code style="background:var(--bg-card);padding:2px 6px;border-radius:4px;border:1px solid var(--border-light)">model: "gemini-web/gemini-3.6-flash"</code>.<br>
+                            Requests are routed through the logged-in Google browser session — no API key required from Google.
+                        </div>
                     </div>
                 </section>
             </div>

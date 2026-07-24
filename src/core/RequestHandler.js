@@ -4439,9 +4439,17 @@ class RequestHandler {
 
         // Parse input
         const messages = req.body?.messages || [];
-        const prompt = this.geminiWebClient.buildPromptFromMessages(messages);
+        let prompt = this.geminiWebClient.buildPromptFromMessages(messages);
+
+        const tools = req.body?.tools || [];
+        const hasTools = tools.length > 0;
+        if (hasTools) {
+            prompt = this.geminiWebClient.buildToolPrompt(prompt, tools);
+        }
+
         const isStreaming = req.body?.stream === true;
         const isImageGen = this.geminiWebClient.isImageIntent(prompt);
+        const requiresBuffering = isImageGen || hasTools;
 
         // Build request parameters
         const { url, headers } = this.geminiWebClient.buildRequestParams(resolvedModel, snlm0e);
@@ -4456,9 +4464,9 @@ class RequestHandler {
         });
 
         try {
-            if (!isStreaming || isImageGen) {
-                // ── Buffered mode: non-streaming or image generation ──────────────
-                // Image generation must buffer the full response (images arrive in last frame)
+            if (!isStreaming || requiresBuffering) {
+                // ── Buffered mode: non-streaming, image generation, or tool calls ──────────────
+                // Image gen and tool calls must buffer the full response
                 let rawBuf = "";
                 let streamError = null;
 
@@ -4481,6 +4489,12 @@ class RequestHandler {
                 }
 
                 const parsed = this.geminiWebClient.parseOutput(rawBuf);
+
+                if (hasTools) {
+                    const toolResp = this.geminiWebClient.parseToolResponse(parsed.text || "");
+                    parsed.text = toolResp.content || "";
+                    if (toolResp.tool_calls) parsed.tool_calls = toolResp.tool_calls;
+                }
 
                 // Download and store any generated images
                 if (parsed.images && parsed.images.length > 0) {
@@ -4514,6 +4528,55 @@ class RequestHandler {
                     this.browserManager
                         .deleteGeminiWebConversation(authIndex, parsed.conversationId, snlm0e)
                         .catch(e => this.logger.warn(`[GeminiWeb] Delete conv failed: ${e.message}`));
+                }
+
+                if (isStreaming) {
+                    res.setHeader("Content-Type", "text/event-stream");
+                    res.setHeader("Cache-Control", "no-cache");
+                    res.setHeader("Connection", "keep-alive");
+                    res.setHeader("X-Accel-Buffering", "no");
+
+                    const completionId = `chatcmpl-gw-${Date.now()}`;
+                    this._writeSSE(res, {
+                        id: completionId,
+                        object: "chat.completion.chunk",
+                        model: modelName,
+                        choices: [{ index: 0, delta: { role: "assistant" }, finish_reason: null }],
+                    });
+
+                    if (parsed.tool_calls) {
+                        this._writeSSE(res, {
+                            id: completionId,
+                            object: "chat.completion.chunk",
+                            model: modelName,
+                            choices: [{ index: 0, delta: { tool_calls: parsed.tool_calls }, finish_reason: null }],
+                        });
+                        this._writeSSE(res, {
+                            id: completionId,
+                            object: "chat.completion.chunk",
+                            model: modelName,
+                            choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }],
+                        });
+                    } else {
+                        if (parsed.text) {
+                            this._writeSSE(res, {
+                                id: completionId,
+                                object: "chat.completion.chunk",
+                                model: modelName,
+                                choices: [{ index: 0, delta: { content: parsed.text }, finish_reason: null }],
+                            });
+                        }
+                        this._writeSSE(res, {
+                            id: completionId,
+                            object: "chat.completion.chunk",
+                            model: modelName,
+                            choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+                        });
+                    }
+                    res.write("data: [DONE]\n\n");
+                    res.end();
+                    this._finalizeTrackedRequest(requestId, res, {});
+                    return;
                 }
 
                 const responseBody = this._buildGeminiWebOpenAIResponse(parsed, modelName, false);
@@ -4634,12 +4697,19 @@ class RequestHandler {
             };
         }
 
+        const message = { role: "assistant" };
+        if (parsed.tool_calls) {
+            message.tool_calls = parsed.tool_calls;
+        } else {
+            message.content = text;
+        }
+
         return {
             choices: [
                 {
-                    finish_reason: "stop",
+                    finish_reason: parsed.tool_calls ? "tool_calls" : "stop",
                     index: 0,
-                    message: { content: text, role: "assistant" },
+                    message: message,
                 },
             ],
             created: Math.floor(Date.now() / 1000),

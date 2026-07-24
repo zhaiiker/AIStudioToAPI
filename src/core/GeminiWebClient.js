@@ -145,6 +145,164 @@ class GeminiWebClient {
     }
 
     /**
+     * Build the system prompt for tool calling
+     */
+    buildToolPrompt(prompt, tools) {
+        if (!tools || !tools.length) return prompt;
+
+        const toolDescriptions = [];
+        for (const tool of tools) {
+            const func = tool.function || tool;
+            const name = func.name || "";
+            const desc = func.description || "";
+            const params = func.parameters || func.input_schema || {};
+            toolDescriptions.push(`- ${name}: ${desc}\n  Parameters: ${JSON.stringify(params)}`);
+        }
+
+        const toolsText = toolDescriptions.join("\n");
+
+        const systemBlock = `You have access to the following tools:
+${toolsText}
+
+To CALL a tool, output a JSON object EXACTLY like this (tool_calls MUST be an array):
+{"status": "tool_use", "tool_calls": [{"name": "<tool_name>", "arguments": {<args>}}]}
+
+To reply with plain text instead, output:
+{"status": "text", "content": "<your reply>"}
+
+STRICT JSON RULES (follow exactly, or the call fails):
+1. Use double quotes for all keys and string values. Escape inner quotes as \\" and newlines as \\n.
+2. "tool_calls" is ALWAYS a JSON array [ ... ], even for a single call.
+3. "arguments" is a JSON object with the tool's parameters.
+4. Output ONLY the JSON (a \`\`\`json code block is allowed, nothing else).
+
+Example (calling a tool named run with a command argument):
+{"status": "tool_use", "tool_calls": [{"name": "run", "arguments": {"command": "ls -la"}}]}
+
+Example (plain text reply):
+{"status": "text", "content": "Hello, how can I help?"}`;
+
+        return `${systemBlock}\n\nUser message: ${prompt}`;
+    }
+
+    /**
+     * Parse tool responses from Gemini Web
+     */
+    parseToolResponse(text) {
+        if (typeof text !== "string" || !text.trim()) {
+            return { type: "text", content: text || "" };
+        }
+
+        const normalizeToolCalls = (tc) => {
+            if (typeof tc === "object" && !Array.isArray(tc)) tc = [tc];
+            if (!Array.isArray(tc)) return null;
+            const out = [];
+            for (const item of tc) {
+                if (typeof item !== "object" || !item) continue;
+                const fn = (typeof item.function === "object" && item.function) ? item.function : item;
+                const name = fn.name;
+                if (!name) continue;
+                let args = fn.arguments || {};
+                if (typeof args === "string") {
+                    try {
+                        args = JSON.parse(args);
+                    } catch (_) {
+                        args = { _raw: args };
+                    }
+                }
+                out.push({
+                    id: `call_${Math.random().toString(36).substr(2, 9)}`,
+                    type: "function",
+                    function: {
+                        name: name,
+                        arguments: typeof args === "object" ? JSON.stringify(args) : "{}"
+                    }
+                });
+            }
+            return out.length > 0 ? out : null;
+        };
+
+        const tryParse = (str) => {
+            try {
+                const parsed = JSON.parse(str);
+                if (typeof parsed !== "object" || !parsed) return null;
+                const status = parsed.status || "";
+                
+                if (parsed.tool_calls || status === "tool_use") {
+                    const calls = normalizeToolCalls(parsed.tool_calls || parsed);
+                    if (calls) return { type: "tool_calls", tool_calls: calls };
+                }
+                if (status === "text" && "content" in parsed) {
+                    return { type: "text", content: String(parsed.content) };
+                }
+                if (parsed.name && (parsed.arguments || parsed.function)) {
+                    const calls = normalizeToolCalls(parsed);
+                    if (calls) return { type: "tool_calls", tool_calls: calls };
+                }
+            } catch (_) {}
+            return null;
+        };
+
+        const stripCodeFence = (s) => {
+            let res = s.trim();
+            if (res.startsWith("```")) {
+                res = res.replace(/^```[a-zA-Z0-9]*\s*\n?/, "");
+                if (res.trimRight().endsWith("```")) {
+                    res = res.trimRight().slice(0, -3);
+                }
+            }
+            return res.trim();
+        };
+
+        const extractJsonObject = (s) => {
+            const start = s.indexOf("{");
+            if (start === -1) return null;
+            let depth = 0;
+            let inStr = false;
+            let esc = false;
+            for (let i = start; i < s.length; i++) {
+                const c = s[i];
+                if (inStr) {
+                    if (esc) esc = false;
+                    else if (c === "\\") esc = true;
+                    else if (c === '"') inStr = false;
+                } else {
+                    if (c === '"') inStr = true;
+                    else if (c === "{") depth++;
+                    else if (c === "}") {
+                        depth--;
+                        if (depth === 0) return s.slice(start, i + 1);
+                    }
+                }
+            }
+            return null;
+        };
+
+        let r = tryParse(text);
+        if (r) return r;
+
+        const stripped = stripCodeFence(text);
+        if (stripped !== text) {
+            r = tryParse(stripped);
+            if (r) return r;
+        }
+
+        const candidate = extractJsonObject(stripped);
+        if (candidate) {
+            r = tryParse(candidate);
+            if (r) return r;
+        }
+
+        const looksLikeTool = (text.includes('"tool_use"') || text.includes('"tool_calls"') || (text.includes('"name"') && text.includes('"arguments"')));
+        if (looksLikeTool) {
+            this.logger.warn(`[GeminiWebClient] Tool JSON parse failed, ignoring malformed fragment: ${text.slice(0, 120)}`);
+            return { type: "text", content: "（模型返回的工具调用格式有误，已忽略。）" };
+        }
+
+        return { type: "text", content: text };
+    }
+
+    /**
      * Build the complete { url, formData, headers } request params object
      * for use with BrowserManager.executeGeminiWebRequest().
      */

@@ -1173,7 +1173,7 @@ class BrowserManager {
                 const currentPage = this.page; // Capture for this iteration
 
                 // 1. Force page wake-up
-                await currentPage.bringToFront().catch(() => {});
+                await currentPage.bringToFront().catch(() => { });
 
                 // Micro-movements to trigger rendering frames in headless mode
                 const vp = currentPage.viewportSize() || { height: 1080, width: 1920 };
@@ -2801,7 +2801,7 @@ class BrowserManager {
                 this.logger.info(`[GeminiWeb#${authIndex}] ✅ SNlM0e token acquired`);
             } else {
                 this.logger.warn(`[GeminiWeb#${authIndex}] ⚠️ SNlM0e token not found in page, Gemini Web unavailable`);
-                await geminiPage.close().catch(() => {});
+                await geminiPage.close().catch(() => { });
             }
         } catch (e) {
             this.logger.warn(`[GeminiWeb#${authIndex}] _initGeminiWebTab error: ${e.message}`);
@@ -2857,66 +2857,78 @@ class BrowserManager {
      */
     async executeGeminiWebRequest(authIndex, requestParams, onChunk) {
         const contextData = this.contexts.get(authIndex);
-        if (!contextData || !contextData.context) {
-            throw new Error(`[GeminiWeb] No browser context for auth #${authIndex}`);
+        if (!contextData || !contextData.context || !contextData.geminiWebPage || contextData.geminiWebPage.isClosed()) {
+            throw new Error(`[GeminiWeb] No browser context or active page for auth #${authIndex}`);
         }
 
-        // Open a temporary tab (inherits all BrowserContext cookies → Google auth is automatic)
-        const tmpPage = await contextData.context.newPage();
+        const page = contextData.geminiWebPage;
+
+        // Use a unique key to store chunks on the window object (avoids exposeFunction Firefox issues)
+        const reqId = `__gw_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+
         try {
-            // Use a unique callback name to avoid cross-request collision during concurrency
-            const reqId = `gwreq_${Date.now()}_${Math.random().toString(36).slice(2)}`;
-
-            // Wait for the stream to complete; use a Promise that resolves when null is signalled
-            const streamDone = new Promise((resolve, reject) => {
-                // exposeFunction registers a Node.js callback accessible from browser JS
-                tmpPage.exposeFunction(reqId, (chunk) => {
-                    try {
-                        if (chunk === null) {
-                            resolve();
-                            return;
+            // Inject the fetch-and-collect script into the browser.
+            // We intentionally do NOT await the fetch -- we launch it as a background microtask
+            // and write each chunk into window[reqId].chunks so Node can poll for it.
+            await page.evaluate(
+                ({ url, formData, headers, storeKey }) => {
+                    window[storeKey] = { chunks: [], done: false, error: null };
+                    (async () => {
+                        try {
+                            const body = new URLSearchParams(formData);
+                            const resp = await fetch(url, { method: "POST", headers, body });
+                            if (!resp.ok) {
+                                window[storeKey].error = `ERROR:${resp.status} ${resp.statusText}`;
+                                window[storeKey].done = true;
+                                return;
+                            }
+                            const reader = resp.body.getReader();
+                            const decoder = new TextDecoder();
+                            while (true) {
+                                const { done, value } = await reader.read();
+                                if (done) break;
+                                window[storeKey].chunks.push(decoder.decode(value, { stream: true }));
+                            }
+                        } catch (e) {
+                            window[storeKey].error = `ERROR:${e.message}`;
+                        } finally {
+                            window[storeKey].done = true;
                         }
-                        if (typeof chunk === "string" && chunk.startsWith("ERROR:")) {
-                            onChunk(chunk);
-                            resolve();
-                            return;
-                        }
-                        onChunk(chunk);
-                    } catch (e) {
-                        reject(e);
-                    }
-                }).catch(reject);
-            });
-
-            // Execute real fetch in Firefox JS environment (uses Firefox TLS stack + cookie jar)
-            await tmpPage.evaluate(
-                async ({ url, formData, headers, callbackName }) => {
-                    try {
-                        const body = new URLSearchParams(formData);
-                        const resp = await fetch(url, { method: "POST", headers, body });
-                        if (!resp.ok) {
-                            window[callbackName](`ERROR:${resp.status} ${resp.statusText}`);
-                            return;
-                        }
-                        const reader = resp.body.getReader();
-                        const decoder = new TextDecoder();
-                        while (true) {
-                            const { done, value } = await reader.read();
-                            if (done) break;
-                            window[callbackName](decoder.decode(value, { stream: true }));
-                        }
-                        window[callbackName](null); // signal: stream complete
-                    } catch (e) {
-                        window[callbackName](`ERROR:${e.message}`);
-                    }
+                    })();
                 },
-                { ...requestParams, callbackName: reqId }
+                { ...requestParams, storeKey: reqId }
             );
 
-            await streamDone;
+            // Poll for chunks from Node.js side every 80ms
+            let done = false;
+            while (!done) {
+                await new Promise(r => setTimeout(r, 80));
+
+                const state = await page.evaluate((storeKey) => {
+                    const s = window[storeKey];
+                    if (!s) return { chunks: [], done: true, error: 'Store key missing' };
+                    const chunks = s.chunks.splice(0); // drain all pending chunks
+                    return { chunks, done: s.done, error: s.error };
+                }, reqId);
+
+                for (const chunk of state.chunks) {
+                    onChunk(chunk);
+                }
+
+                if (state.error) {
+                    onChunk(state.error);
+                    done = true;
+                } else if (state.done) {
+                    done = true;
+                }
+            }
         } finally {
-            // Close temp tab and release memory
-            try { await tmpPage.close(); } catch (_) {}
+            // Cleanup memory on the page
+            try {
+                await page.evaluate((storeKey) => {
+                    delete window[storeKey];
+                }, reqId);
+            } catch (_) { }
         }
     }
 
@@ -2930,11 +2942,11 @@ class BrowserManager {
      */
     async downloadImageViaPage(authIndex, imageUrl) {
         const contextData = this.contexts.get(authIndex);
-        if (!contextData || !contextData.context) return null;
+        if (!contextData || !contextData.context || !contextData.geminiWebPage || contextData.geminiWebPage.isClosed()) return null;
 
-        const tmpPage = await contextData.context.newPage();
+        const page = contextData.geminiWebPage;
         try {
-            const result = await tmpPage.evaluate(async (url) => {
+            const result = await page.evaluate(async (url) => {
                 try {
                     // Step 1: disable auto-redirect to capture 302 Location
                     const r1 = await fetch(url + "=s2048", { redirect: "manual" });
@@ -2958,8 +2970,6 @@ class BrowserManager {
         } catch (e) {
             this.logger.warn(`[GeminiWeb#${authIndex}] downloadImageViaPage error: ${e.message}`);
             return null;
-        } finally {
-            try { await tmpPage.close(); } catch (_) {}
         }
     }
 
@@ -2974,17 +2984,18 @@ class BrowserManager {
      * @returns {Promise<boolean>}
      */
     async deleteGeminiWebConversation(authIndex, conversationId, snlm0e) {
-        if (!conversationId || !conversationId.startsWith("c_")) {
-            this.logger.debug(`[GeminiWeb#${authIndex}] Skip delete: invalid cid ${conversationId}`);
-            return false;
-        }
+        if (!conversationId) return false;
+
+        // Google UI now sometimes omits the "c_" prefix, but the API still requires it
+        const cid = conversationId.startsWith("c_") ? conversationId : `c_${conversationId}`;
+
         const contextData = this.contexts.get(authIndex);
-        if (!contextData || !contextData.context) return false;
+        if (!contextData || !contextData.context || !contextData.geminiWebPage || contextData.geminiWebPage.isClosed()) return false;
 
         const BATCHEXECUTE_URL = "https://gemini.google.com/_/BardChatUi/data/batchexecute";
-        const tmpPage = await contextData.context.newPage();
+        const page = contextData.geminiWebPage;
         try {
-            const ok = await tmpPage.evaluate(
+            const ok = await page.evaluate(
                 async ({ cid, at, batchUrl }) => {
                     const buildFReq = (rpcId, payload) =>
                         JSON.stringify([[[rpcId, payload, null, "generic"]]]);
@@ -3019,20 +3030,18 @@ class BrowserManager {
                     const ok2 = await postBatch("qWymEb", JSON.stringify([cid, [1, null, 0, 1]]));
                     return ok1 && ok2;
                 },
-                { cid: conversationId, at: snlm0e, batchUrl: BATCHEXECUTE_URL }
+                { cid, at: snlm0e, batchUrl: BATCHEXECUTE_URL }
             );
 
             if (ok) {
-                this.logger.debug(`[GeminiWeb#${authIndex}] ✅ Deleted conversation ${conversationId}`);
+                this.logger.debug(`[GeminiWeb#${authIndex}] ✅ Deleted conversation ${cid}`);
             } else {
-                this.logger.warn(`[GeminiWeb#${authIndex}] ⚠️ Failed to delete conversation ${conversationId}`);
+                this.logger.warn(`[GeminiWeb#${authIndex}] ⚠️ Failed to delete conversation ${cid}`);
             }
             return ok;
         } catch (e) {
             this.logger.warn(`[GeminiWeb#${authIndex}] deleteGeminiWebConversation error: ${e.message}`);
             return false;
-        } finally {
-            try { await tmpPage.close(); } catch (_) {}
         }
     }
 
@@ -3045,82 +3054,118 @@ class BrowserManager {
      */
     async cleanupGeminiWebConversations(authIndex, keepHours = 1) {
         const contextData = this.contexts.get(authIndex);
-        if (!contextData || !contextData.geminiSnlM0e || !contextData.context) return;
+        if (!contextData || !contextData.geminiSnlM0e || !contextData.context || !contextData.geminiWebPage || contextData.geminiWebPage.isClosed()) return;
 
         const snlm0e = contextData.geminiSnlM0e;
         const BATCHEXECUTE_URL = "https://gemini.google.com/_/BardChatUi/data/batchexecute";
         const cutoffSec = Date.now() / 1000 - Math.max(1, keepHours) * 3600;
 
-        const tmpPage = await contextData.context.newPage();
+        const page = contextData.geminiWebPage;
         try {
-            const chats = await tmpPage.evaluate(
-                async ({ at, batchUrl }) => {
-                    // MaZiqc: list web chats
-                    const listChats = async (flag) => {
-                        const payload = JSON.stringify([300, null, [flag, null, 1]]);
-                        const fReq = JSON.stringify([[["MaZiqc", payload, null, "generic"]]]);
-                        const params = new URLSearchParams({
-                            rpcids: "MaZiqc", hl: "en", rt: "c",
-                            "source-path": "/app",
-                            _reqid: String(Math.floor(100000 + Math.random() * 900000)),
-                        });
-                        const body = new URLSearchParams({ "f.req": fReq, at });
-                        try {
-                            const resp = await fetch(`${batchUrl}?${params}`, {
-                                method: "POST",
-                                headers: { "Content-Type": "application/x-www-form-urlencoded", "X-Same-Domain": "1" },
-                                body,
+            const MAX_ROUNDS = 50; // Safety limit
+            let totalListed = 0, totalDeleted = 0, totalSkipped = 0, totalFailed = 0;
+
+            for (let round = 0; round < MAX_ROUNDS; round++) {
+                const chats = await page.evaluate(
+                    async ({ at, batchUrl }) => {
+                        // MaZiqc: list web chats
+                        const listChats = async (flag) => {
+                            const payload = JSON.stringify([300, null, [flag, null, 1]]);
+                            const fReq = JSON.stringify([[["MaZiqc", payload, null, "generic"]]]);
+                            const params = new URLSearchParams({
+                                rpcids: "MaZiqc", hl: "en", rt: "c",
+                                "source-path": "/app",
+                                _reqid: String(Math.floor(100000 + Math.random() * 900000)),
                             });
-                            if (!resp.ok) return [];
-                            const text = await resp.text();
-                            // Parse wrb.fr response
-                            const lines = text.split("\n");
-                            for (const line of lines) {
-                                if (!line.trim().startsWith("[[")) continue;
-                                try {
-                                    const outer = JSON.parse(line.trim());
-                                    for (const item of outer) {
-                                        if (Array.isArray(item) && item[0] === "wrb.fr" && typeof item[2] === "string") {
-                                            const body2 = JSON.parse(item[2]);
-                                            if (Array.isArray(body2) && Array.isArray(body2[2])) {
-                                                return body2[2].map(c => ({
-                                                    cid: c[0],
-                                                    ts: (Array.isArray(c[5]) && c[5][0]) ? (Number(c[5][0]) + (c[5][1] || 0) / 1e9) : 0,
-                                                }));
+                            const body = new URLSearchParams({ "f.req": fReq, at });
+                            try {
+                                const resp = await fetch(`${batchUrl}?${params}`, {
+                                    method: "POST",
+                                    headers: { "Content-Type": "application/x-www-form-urlencoded", "X-Same-Domain": "1" },
+                                    body,
+                                });
+                                if (!resp.ok) return [];
+                                const text = await resp.text();
+                                // Parse wrb.fr response
+                                const lines = text.split("\n");
+                                for (const line of lines) {
+                                    if (!line.trim().startsWith("[[")) continue;
+                                    try {
+                                        const outer = JSON.parse(line.trim());
+                                        for (const item of outer) {
+                                            if (Array.isArray(item) && item[0] === "wrb.fr" && typeof item[2] === "string") {
+                                                const body2 = JSON.parse(item[2]);
+                                                if (Array.isArray(body2) && Array.isArray(body2[2])) {
+                                                    return body2[2].map(c => ({
+                                                        cid: c[0],
+                                                        pinned: Boolean(c[2]),
+                                                        ts: (Array.isArray(c[5]) && c[5][0]) ? (Number(c[5][0]) + (c[5][1] || 0) / 1e9) : 0,
+                                                    }));
+                                                }
                                             }
                                         }
-                                    }
-                                } catch (_) {}
-                            }
-                        } catch (_) {}
-                        return [];
-                    };
-                    const a = await listChats(1);
-                    const b = await listChats(0);
-                    const seen = {};
-                    for (const c of [...a, ...b]) if (c.cid && !seen[c.cid]) seen[c.cid] = c;
-                    return Object.values(seen);
-                },
-                { at: snlm0e, batchUrl: BATCHEXECUTE_URL }
-            );
+                                    } catch (_) { }
+                                }
+                            } catch (_) { }
+                            return [];
+                        };
+                        const a = await listChats(1);
+                        const b = await listChats(0);
+                        const seen = {};
+                        for (const c of [...a, ...b]) if (c.cid && !seen[c.cid]) seen[c.cid] = c;
+                        return Object.values(seen);
+                    },
+                    { at: snlm0e, batchUrl: BATCHEXECUTE_URL }
+                );
 
-            let deleted = 0;
-            for (const chat of chats) {
-                if (!chat.cid || !chat.cid.startsWith("c_")) continue;
-                if (chat.ts <= 0 || chat.ts >= cutoffSec) continue;
-                const ok = await this.deleteGeminiWebConversation(authIndex, chat.cid, snlm0e);
-                if (ok) deleted++;
-                // Slight delay to avoid rate-limiting
-                await new Promise(r => setTimeout(r, 300));
+                if (!chats || chats.length === 0) break;
+                totalListed += chats.length;
+
+                let roundDeleted = 0;
+                let roundSkipped = 0;
+
+                for (const chat of chats) {
+                    if (!chat.cid) continue;
+
+                    // Skip pinned
+                    if (chat.pinned) {
+                        totalSkipped++;
+                        roundSkipped++;
+                        continue;
+                    }
+
+                    // Skip if parsing failed or within keep window
+                    if (chat.ts <= 0 || chat.ts >= cutoffSec) {
+                        totalSkipped++;
+                        roundSkipped++;
+                        continue;
+                    }
+
+                    // Add c_ prefix if missing
+                    const cid = chat.cid.startsWith("c_") ? chat.cid : `c_${chat.cid}`;
+
+                    const ok = await this.deleteGeminiWebConversation(authIndex, cid, snlm0e);
+                    if (ok) {
+                        totalDeleted++;
+                        roundDeleted++;
+                    } else {
+                        totalFailed++;
+                    }
+                    
+                    // Slight delay to avoid rate-limiting
+                    await new Promise(r => setTimeout(r, 300));
+                }
+
+                // If we didn't delete anything in this round, no more eligible chats remain
+                if (roundDeleted === 0) break;
             }
 
-            if (deleted > 0) {
-                this.logger.info(`[GeminiWeb#${authIndex}] Periodic cleanup: deleted ${deleted} old conversations`);
+            if (totalDeleted > 0 || totalFailed > 0) {
+                this.logger.info(`[GeminiWeb#${authIndex}] Periodic cleanup: listed=${totalListed} deleted=${totalDeleted} skipped=${totalSkipped} failed=${totalFailed}`);
             }
         } catch (e) {
             this.logger.warn(`[GeminiWeb#${authIndex}] cleanupGeminiWebConversations error: ${e.message}`);
-        } finally {
-            try { await tmpPage.close(); } catch (_) {}
+            // Do NOT close the geminiWebPage
         }
     }
 }
