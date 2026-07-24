@@ -99,6 +99,28 @@
                         <path d="M7 16l4-4 3 3 5-7"></path>
                     </svg>
                 </button>
+                <button
+                    class="menu-item gemini-web-tab-btn"
+                    :class="{ active: activeTab === 'gemini-web' }"
+                    title="Gemini Web"
+                    @click="switchTab('gemini-web')"
+                >
+                    <svg
+                        xmlns="http://www.w3.org/2000/svg"
+                        width="24"
+                        height="24"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="2"
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                    >
+                        <circle cx="12" cy="12" r="10"></circle>
+                        <path d="M2 12h20"></path>
+                        <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path>
+                    </svg>
+                </button>
             </div>
 
             <div class="sidebar-footer">
@@ -832,6 +854,15 @@
                                         </span>
                                         <span v-if="item.isExpired" class="expired-badge">
                                             {{ t("tagExpired") }}
+                                        </span>
+                                        <!-- Gemini Web status badge -->
+                                        <span
+                                            v-if="geminiWebStatus(item.index)"
+                                            class="gemini-web-badge"
+                                            :class="{ 'gw-ready': geminiWebStatus(item.index) === 'ready', 'gw-pending': geminiWebStatus(item.index) === 'pending' }"
+                                            :title="geminiWebStatus(item.index) === 'ready' ? 'Gemini Web: Ready' : 'Gemini Web: Initializing'"
+                                        >
+                                            GW
                                         </span>
                                     </div>
                                 </el-tooltip>
@@ -2691,6 +2722,116 @@
                 </div>
             </div>
 
+            <!-- GEMINI WEB VIEW -->
+            <div v-if="activeTab === 'gemini-web'" class="view-container">
+                <header class="page-header">
+                    <h1>Gemini Web</h1>
+                    <button class="btn-icon" title="Refresh status" @click="fetchGeminiWebStatus">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24"
+                            fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                            stroke-linejoin="round">
+                            <path d="M23 4v6h-6"></path>
+                            <path d="M1 20v-6h6"></path>
+                            <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10"></path>
+                            <path d="M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+                        </svg>
+                        Refresh
+                    </button>
+                </header>
+
+                <div class="stats-grid" style="margin-bottom:24px">
+                    <div class="stat-card">
+                        <div class="stat-label">Available Accounts</div>
+                        <div class="stat-value" style="color:var(--success-color)">
+                            {{ geminiWebAccounts.filter(a => a.geminiWebAvailable).length }}
+                            / {{ geminiWebAccounts.length }}
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Supported Models</div>
+                        <div class="stat-value">{{ geminiWebModelCount }}</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Image Store</div>
+                        <div class="stat-value" style="font-size:13px;color:var(--text-secondary)">
+                            /gemini-web/images/:id
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Account status table -->
+                <section class="info-card" style="padding:0;overflow:hidden">
+                    <div style="padding:16px 20px;border-bottom:1px solid var(--border-light);font-weight:600">
+                        Account Status
+                    </div>
+                    <div v-if="geminiWebAccounts.length === 0" style="padding:32px;text-align:center;color:var(--text-secondary)">
+                        No browser contexts initialized yet.
+                    </div>
+                    <table v-else style="width:100%;border-collapse:collapse">
+                        <thead>
+                            <tr style="background:var(--bg-secondary)">
+                                <th style="padding:10px 16px;text-align:left;font-size:12px;color:var(--text-secondary);font-weight:500">#</th>
+                                <th style="padding:10px 16px;text-align:left;font-size:12px;color:var(--text-secondary);font-weight:500">Account</th>
+                                <th style="padding:10px 16px;text-align:left;font-size:12px;color:var(--text-secondary);font-weight:500">Gemini Web</th>
+                                <th style="padding:10px 16px;text-align:left;font-size:12px;color:var(--text-secondary);font-weight:500">Token Acquired</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr
+                                v-for="acc in geminiWebAccounts"
+                                :key="acc.authIndex"
+                                style="border-top:1px solid var(--border-light)"
+                            >
+                                <td style="padding:10px 16px;font-size:13px">#{{ acc.authIndex }}</td>
+                                <td style="padding:10px 16px;font-size:13px;color:var(--text-secondary)">{{ acc.accountName || '—' }}</td>
+                                <td style="padding:10px 16px">
+                                    <span
+                                        v-if="acc.geminiWebAvailable"
+                                        style="display:inline-flex;align-items:center;gap:5px;padding:2px 10px;border-radius:12px;font-size:12px;background:var(--success-color-light,rgba(34,197,94,.15));color:var(--success-color,#22c55e);font-weight:500"
+                                    >
+                                        <span style="width:6px;height:6px;border-radius:50%;background:currentColor"></span>
+                                        Ready
+                                    </span>
+                                    <span
+                                        v-else-if="acc.hasGeminiWebToken"
+                                        style="display:inline-flex;align-items:center;gap:5px;padding:2px 10px;border-radius:12px;font-size:12px;background:rgba(234,179,8,.15);color:#eab308;font-weight:500"
+                                    >
+                                        <span style="width:6px;height:6px;border-radius:50%;background:currentColor"></span>
+                                        Tab Closed
+                                    </span>
+                                    <span
+                                        v-else
+                                        style="display:inline-flex;align-items:center;gap:5px;padding:2px 10px;border-radius:12px;font-size:12px;background:var(--bg-secondary);color:var(--text-secondary);font-weight:500"
+                                    >
+                                        <span style="width:6px;height:6px;border-radius:50%;background:currentColor"></span>
+                                        Not Available
+                                    </span>
+                                </td>
+                                <td style="padding:10px 16px;font-size:12px;color:var(--text-secondary)">
+                                    {{ acc.tokenRefreshedAt ? new Date(acc.tokenRefreshedAt).toLocaleString() : '—' }}
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </section>
+
+                <!-- Model list -->
+                <section class="info-card" style="margin-top:20px">
+                    <div style="font-weight:600;margin-bottom:14px">Supported Models (gemini-web/*)</div>
+                    <div style="display:flex;flex-wrap:wrap;gap:8px">
+                        <span
+                            v-for="m in geminiWebModels"
+                            :key="m"
+                            style="padding:4px 12px;border-radius:12px;font-size:12px;background:var(--bg-secondary);color:var(--text-primary);border:1px solid var(--border-light)"
+                        >{{ m }}</span>
+                    </div>
+                    <div style="margin-top:16px;padding:12px;border-radius:8px;background:var(--bg-secondary);font-size:12px;color:var(--text-secondary)">
+                        <strong>Usage:</strong> Send OpenAI-compatible requests to <code style="background:var(--bg-card);padding:2px 6px;border-radius:4px">/v1/chat/completions</code> with <code style="background:var(--bg-card);padding:2px 6px;border-radius:4px">model: "gemini-web/gemini-3.6-flash"</code>.
+                        Requests are routed through the logged-in Google browser session — no API key required from Google.
+                    </div>
+                </section>
+            </div>
+
             <!-- LOGS VIEW -->
             <div v-if="activeTab === 'logs'" class="view-container logs-view-container">
                 <header class="page-header" style="display: flex; justify-content: space-between; align-items: center">
@@ -2948,7 +3089,44 @@ const normalizedCustomTimeRange = computed(() => {
     return start.getTime() <= end.getTime() ? [start, end] : [end, start];
 });
 
+// ─── Gemini Web state ──────────────────────────────────────────────────────
+const geminiWebAccounts = ref([]);
+
+/** Fetch Gemini Web account status from /api/gemini-web/status */
+const fetchGeminiWebStatus = async () => {
+    try {
+        const res = await fetch("/api/gemini-web/status");
+        if (!res.ok) return;
+        const data = await res.json();
+        geminiWebAccounts.value = data.accounts || [];
+    } catch (_) {
+        geminiWebAccounts.value = [];
+    }
+};
+
+/** Returns 'ready' | 'pending' | null for a given authIndex */
+const geminiWebStatus = (authIndex) => {
+    const acc = geminiWebAccounts.value.find(a => a.authIndex === authIndex);
+    if (!acc) return null;
+    if (acc.geminiWebAvailable) return "ready";
+    if (acc.hasGeminiWebToken) return "pending";
+    return null;
+};
+
+const geminiWebModels = [
+    "gemini-web/gemini-3.1-pro",
+    "gemini-web/gemini-3.6-flash",
+    "gemini-web/gemini-3.6-flash-thinking",
+    "gemini-web/gemini-3.1-pro-advanced",
+    "gemini-web/gemini-3.6-flash-advanced",
+    "gemini-web/gemini-3.6-flash-thinking-advanced",
+];
+
+const geminiWebModelCount = computed(() => geminiWebModels.length);
+// ──────────────────────────────────────────────────────────────────────────────
+
 const EMPTY_FILTER_VALUE = "__EMPTY__";
+
 const isEmptyFilterField = value =>
     value === null || value === undefined || (typeof value === "string" && !value.trim());
 const isFilterArrayActive = filterArray =>
@@ -3690,6 +3868,10 @@ const switchTab = tabName => {
                 logContainer.scrollTop = state.logScrollTop || 0;
             }
         });
+    }
+
+    if (tabName === "gemini-web") {
+        fetchGeminiWebStatus();
     }
 };
 
@@ -4998,6 +5180,7 @@ onMounted(() => {
 
     updateContent().finally(scheduleUpdate);
     fetchUsageStats().finally(scheduleUpdate);
+    fetchGeminiWebStatus();
 
     // Check for updates once on initial load
     checkForUpdates();
@@ -5539,6 +5722,55 @@ watchEffect(() => {
     flex-shrink: 0;
     margin-left: 0;
     margin-right: 6px;
+}
+
+// Gemini Web account badge
+.gemini-web-badge {
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+    padding: 1px 6px;
+    border-radius: 10px;
+    flex-shrink: 0;
+    margin-left: 0;
+    margin-right: 4px;
+    border: 1px solid currentColor;
+    line-height: 1.6;
+
+    &.gw-ready {
+        color: #22c55e;
+        background: rgba(34, 197, 94, 0.12);
+        border-color: rgba(34, 197, 94, 0.35);
+    }
+
+    &.gw-pending {
+        color: #eab308;
+        background: rgba(234, 179, 8, 0.12);
+        border-color: rgba(234, 179, 8, 0.35);
+        animation: gw-pulse 1.8s ease-in-out infinite;
+    }
+}
+
+@keyframes gw-pulse {
+    0%, 100% { opacity: 1; }
+    50%       { opacity: 0.5; }
+}
+
+// Gemini Web sidebar tab button accent
+.gemini-web-tab-btn {
+    position: relative;
+
+    &.active::after {
+        content: '';
+        position: absolute;
+        bottom: 4px;
+        left: 50%;
+        transform: translateX(-50%);
+        width: 4px;
+        height: 4px;
+        border-radius: 50%;
+        background: #22c55e;
+    }
 }
 
 .account-actions {

@@ -1074,6 +1074,24 @@ class BrowserManager {
                 }
             }
         }, 4000);
+
+        // Gemini Web: refresh SNlM0e token every 30 minutes
+        setInterval(async () => {
+            try {
+                await this._maybeRefreshGeminiWebToken(authIndex, true);
+            } catch (e) {
+                this.logger.warn(`[GeminiWeb#${authIndex}] Token refresh error: ${e.message}`);
+            }
+        }, 30 * 60 * 1000);
+
+        // Gemini Web: periodic chat cleanup every hour (catches any leaked conversations)
+        setInterval(async () => {
+            try {
+                await this.cleanupGeminiWebConversations(authIndex, 1);
+            } catch (e) {
+                this.logger.warn(`[GeminiWeb#${authIndex}] Cleanup error: ${e.message}`);
+            }
+        }, 60 * 60 * 1000);
     }
 
     /**
@@ -2192,7 +2210,15 @@ class BrowserManager {
                     context,
                     healthMonitorInterval: null,
                     page,
+                    // Gemini Web integration fields
+                    geminiWebPage: null,
+                    geminiSnlM0e: "",
+                    geminiSnlM0eRefreshedAt: 0,
                 });
+                // Async: Initialize Gemini Web Tab (non-blocking, does not affect AI Studio startup)
+                this._initGeminiWebTab(authIndex).catch(e =>
+                    this.logger.warn(`[GeminiWeb#${authIndex}] Tab init failed: ${e.message}`)
+                );
             } else {
                 this._throwIfContextInitAborted(authIndex, isBackgroundTask);
             }
@@ -2744,6 +2770,358 @@ class BrowserManager {
         this.logger.info(`🔄 [Browser] Starting account switch: from ${this._currentAuthIndex} to ${newAuthIndex}`);
         await this.launchOrSwitchContext(newAuthIndex);
         this.logger.info(`✅ [Browser] Account switch completed, current account: ${this._currentAuthIndex}`);
+    }
+
+    // ─── Gemini Web Integration ───────────────────────────────────────────────
+
+    /**
+     * Open a persistent Gemini Web Tab in the BrowserContext to extract the SNlM0e
+     * session token and keep Google cookies alive.
+     * Called asynchronously after _initializeContext (non-blocking).
+     */
+    async _initGeminiWebTab(authIndex) {
+        const contextData = this.contexts.get(authIndex);
+        if (!contextData || !contextData.context) return;
+
+        try {
+            const geminiPage = await contextData.context.newPage();
+            await geminiPage.goto("https://gemini.google.com/app?hl=en", {
+                timeout: 60000,
+                waitUntil: "domcontentloaded",
+            });
+            await geminiPage.waitForTimeout(2000);
+
+            const html = await geminiPage.content();
+            const tokenMatch = html.match(/"SNlM0e":"([^"]+)"/);
+
+            if (tokenMatch) {
+                contextData.geminiSnlM0e = tokenMatch[1];
+                contextData.geminiSnlM0eRefreshedAt = Date.now();
+                contextData.geminiWebPage = geminiPage; // keep tab open to maintain cookie activity
+                this.logger.info(`[GeminiWeb#${authIndex}] ✅ SNlM0e token acquired`);
+            } else {
+                this.logger.warn(`[GeminiWeb#${authIndex}] ⚠️ SNlM0e token not found in page, Gemini Web unavailable`);
+                await geminiPage.close().catch(() => {});
+            }
+        } catch (e) {
+            this.logger.warn(`[GeminiWeb#${authIndex}] _initGeminiWebTab error: ${e.message}`);
+        }
+    }
+
+    /**
+     * Refresh the Gemini Web SNlM0e token by reloading the Gemini page.
+     * @param {number} authIndex
+     * @param {boolean} [force=false] - if false, only refresh if token is older than 30 minutes
+     */
+    async _maybeRefreshGeminiWebToken(authIndex, force = false) {
+        const contextData = this.contexts.get(authIndex);
+        if (!contextData) return;
+
+        const ageMs = Date.now() - (contextData.geminiSnlM0eRefreshedAt || 0);
+        const REFRESH_INTERVAL_MS = 30 * 60 * 1000;
+        if (!force && ageMs < REFRESH_INTERVAL_MS) return;
+
+        try {
+            if (contextData.geminiWebPage && !contextData.geminiWebPage.isClosed()) {
+                await contextData.geminiWebPage.reload({
+                    timeout: 30000,
+                    waitUntil: "domcontentloaded",
+                });
+                await contextData.geminiWebPage.waitForTimeout(1500);
+                const html = await contextData.geminiWebPage.content();
+                const tokenMatch = html.match(/"SNlM0e":"([^"]+)"/);
+                if (tokenMatch) {
+                    contextData.geminiSnlM0e = tokenMatch[1];
+                    contextData.geminiSnlM0eRefreshedAt = Date.now();
+                    this.logger.info(`[GeminiWeb#${authIndex}] ✅ SNlM0e token refreshed`);
+                } else {
+                    this.logger.warn(`[GeminiWeb#${authIndex}] ⚠️ Token refresh: SNlM0e not found after reload`);
+                }
+            } else {
+                // Re-initialize if tab was closed
+                await this._initGeminiWebTab(authIndex);
+            }
+        } catch (e) {
+            this.logger.warn(`[GeminiWeb#${authIndex}] Token refresh error: ${e.message}`);
+        }
+    }
+
+    /**
+     * Execute a Gemini Web StreamGenerate request inside the browser (Firefox native fetch).
+     * This bypasses Google TLS/bot detection that would block Node.js axios/node-fetch.
+     *
+     * @param {number} authIndex
+     * @param {{ url: string, formData: Object, headers: Object }} requestParams
+     * @param {Function} onChunk - called with each string chunk; null signals stream end; "ERROR:..." signals error
+     * @returns {Promise<void>} resolves when all chunks have been received
+     */
+    async executeGeminiWebRequest(authIndex, requestParams, onChunk) {
+        const contextData = this.contexts.get(authIndex);
+        if (!contextData || !contextData.context) {
+            throw new Error(`[GeminiWeb] No browser context for auth #${authIndex}`);
+        }
+
+        // Open a temporary tab (inherits all BrowserContext cookies → Google auth is automatic)
+        const tmpPage = await contextData.context.newPage();
+        try {
+            // Use a unique callback name to avoid cross-request collision during concurrency
+            const reqId = `gwreq_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+
+            // Wait for the stream to complete; use a Promise that resolves when null is signalled
+            const streamDone = new Promise((resolve, reject) => {
+                // exposeFunction registers a Node.js callback accessible from browser JS
+                tmpPage.exposeFunction(reqId, (chunk) => {
+                    try {
+                        if (chunk === null) {
+                            resolve();
+                            return;
+                        }
+                        if (typeof chunk === "string" && chunk.startsWith("ERROR:")) {
+                            onChunk(chunk);
+                            resolve();
+                            return;
+                        }
+                        onChunk(chunk);
+                    } catch (e) {
+                        reject(e);
+                    }
+                }).catch(reject);
+            });
+
+            // Execute real fetch in Firefox JS environment (uses Firefox TLS stack + cookie jar)
+            await tmpPage.evaluate(
+                async ({ url, formData, headers, callbackName }) => {
+                    try {
+                        const body = new URLSearchParams(formData);
+                        const resp = await fetch(url, { method: "POST", headers, body });
+                        if (!resp.ok) {
+                            window[callbackName](`ERROR:${resp.status} ${resp.statusText}`);
+                            return;
+                        }
+                        const reader = resp.body.getReader();
+                        const decoder = new TextDecoder();
+                        while (true) {
+                            const { done, value } = await reader.read();
+                            if (done) break;
+                            window[callbackName](decoder.decode(value, { stream: true }));
+                        }
+                        window[callbackName](null); // signal: stream complete
+                    } catch (e) {
+                        window[callbackName](`ERROR:${e.message}`);
+                    }
+                },
+                { ...requestParams, callbackName: reqId }
+            );
+
+            await streamDone;
+        } finally {
+            // Close temp tab and release memory
+            try { await tmpPage.close(); } catch (_) {}
+        }
+    }
+
+    /**
+     * Download an AI-generated image via the browser (avoids lh3.google 403).
+     * Uses the two-step redirect approach from Python _download_generated_image().
+     *
+     * @param {number} authIndex
+     * @param {string} imageUrl - original lh3.google image URL
+     * @returns {Promise<{b64: string, mime: string}|null>}
+     */
+    async downloadImageViaPage(authIndex, imageUrl) {
+        const contextData = this.contexts.get(authIndex);
+        if (!contextData || !contextData.context) return null;
+
+        const tmpPage = await contextData.context.newPage();
+        try {
+            const result = await tmpPage.evaluate(async (url) => {
+                try {
+                    // Step 1: disable auto-redirect to capture 302 Location
+                    const r1 = await fetch(url + "=s2048", { redirect: "manual" });
+                    const loc = r1.headers.get("location") || url;
+                    // Step 2: follow redirect with cookies to final image
+                    const r2 = await fetch(loc);
+                    if (!r2.ok) return null;
+                    const buf = await r2.arrayBuffer();
+                    const bytes = new Uint8Array(buf);
+                    let binary = "";
+                    for (const b of bytes) binary += String.fromCharCode(b);
+                    return {
+                        b64: btoa(binary),
+                        mime: r2.headers.get("content-type") || "image/png",
+                    };
+                } catch (_) {
+                    return null;
+                }
+            }, imageUrl);
+            return result; // { b64, mime } or null
+        } catch (e) {
+            this.logger.warn(`[GeminiWeb#${authIndex}] downloadImageViaPage error: ${e.message}`);
+            return null;
+        } finally {
+            try { await tmpPage.close(); } catch (_) {}
+        }
+    }
+
+    /**
+     * Delete a Gemini Web conversation via two-step batchexecute RPC.
+     * Ported from Python delete_web_chat (GzXR5e → qWymEb).
+     * Must be called after every request to prevent Google account history accumulation.
+     *
+     * @param {number} authIndex
+     * @param {string} conversationId - "c_xxx" format conversation id
+     * @param {string} snlm0e - SNlM0e token
+     * @returns {Promise<boolean>}
+     */
+    async deleteGeminiWebConversation(authIndex, conversationId, snlm0e) {
+        if (!conversationId || !conversationId.startsWith("c_")) {
+            this.logger.debug(`[GeminiWeb#${authIndex}] Skip delete: invalid cid ${conversationId}`);
+            return false;
+        }
+        const contextData = this.contexts.get(authIndex);
+        if (!contextData || !contextData.context) return false;
+
+        const BATCHEXECUTE_URL = "https://gemini.google.com/_/BardChatUi/data/batchexecute";
+        const tmpPage = await contextData.context.newPage();
+        try {
+            const ok = await tmpPage.evaluate(
+                async ({ cid, at, batchUrl }) => {
+                    const buildFReq = (rpcId, payload) =>
+                        JSON.stringify([[[rpcId, payload, null, "generic"]]]);
+
+                    const postBatch = async (rpcId, payload) => {
+                        const params = new URLSearchParams({
+                            rpcids: rpcId,
+                            hl: "en",
+                            rt: "c",
+                            "source-path": "/app",
+                            _reqid: String(Math.floor(100000 + Math.random() * 900000)),
+                        });
+                        const body = new URLSearchParams({
+                            "f.req": buildFReq(rpcId, payload),
+                            at: at,
+                        });
+                        const resp = await fetch(`${batchUrl}?${params}`, {
+                            method: "POST",
+                            headers: {
+                                "Content-Type": "application/x-www-form-urlencoded",
+                                "X-Same-Domain": "1",
+                            },
+                            body,
+                        });
+                        return resp.ok;
+                    };
+
+                    // Step 1: GzXR5e - mark for deletion
+                    const ok1 = await postBatch("GzXR5e", JSON.stringify([cid]));
+                    if (!ok1) return false;
+                    // Step 2: qWymEb - confirm deletion
+                    const ok2 = await postBatch("qWymEb", JSON.stringify([cid, [1, null, 0, 1]]));
+                    return ok1 && ok2;
+                },
+                { cid: conversationId, at: snlm0e, batchUrl: BATCHEXECUTE_URL }
+            );
+
+            if (ok) {
+                this.logger.debug(`[GeminiWeb#${authIndex}] ✅ Deleted conversation ${conversationId}`);
+            } else {
+                this.logger.warn(`[GeminiWeb#${authIndex}] ⚠️ Failed to delete conversation ${conversationId}`);
+            }
+            return ok;
+        } catch (e) {
+            this.logger.warn(`[GeminiWeb#${authIndex}] deleteGeminiWebConversation error: ${e.message}`);
+            return false;
+        } finally {
+            try { await tmpPage.close(); } catch (_) {}
+        }
+    }
+
+    /**
+     * Periodic cleanup: list and delete Gemini Web conversations older than keepHours.
+     * Ported from Python cleanup_old_web_chats (MaZiqc + GzXR5e → qWymEb).
+     *
+     * @param {number} authIndex
+     * @param {number} [keepHours=1] - keep conversations younger than this
+     */
+    async cleanupGeminiWebConversations(authIndex, keepHours = 1) {
+        const contextData = this.contexts.get(authIndex);
+        if (!contextData || !contextData.geminiSnlM0e || !contextData.context) return;
+
+        const snlm0e = contextData.geminiSnlM0e;
+        const BATCHEXECUTE_URL = "https://gemini.google.com/_/BardChatUi/data/batchexecute";
+        const cutoffSec = Date.now() / 1000 - Math.max(1, keepHours) * 3600;
+
+        const tmpPage = await contextData.context.newPage();
+        try {
+            const chats = await tmpPage.evaluate(
+                async ({ at, batchUrl }) => {
+                    // MaZiqc: list web chats
+                    const listChats = async (flag) => {
+                        const payload = JSON.stringify([300, null, [flag, null, 1]]);
+                        const fReq = JSON.stringify([[["MaZiqc", payload, null, "generic"]]]);
+                        const params = new URLSearchParams({
+                            rpcids: "MaZiqc", hl: "en", rt: "c",
+                            "source-path": "/app",
+                            _reqid: String(Math.floor(100000 + Math.random() * 900000)),
+                        });
+                        const body = new URLSearchParams({ "f.req": fReq, at });
+                        try {
+                            const resp = await fetch(`${batchUrl}?${params}`, {
+                                method: "POST",
+                                headers: { "Content-Type": "application/x-www-form-urlencoded", "X-Same-Domain": "1" },
+                                body,
+                            });
+                            if (!resp.ok) return [];
+                            const text = await resp.text();
+                            // Parse wrb.fr response
+                            const lines = text.split("\n");
+                            for (const line of lines) {
+                                if (!line.trim().startsWith("[[")) continue;
+                                try {
+                                    const outer = JSON.parse(line.trim());
+                                    for (const item of outer) {
+                                        if (Array.isArray(item) && item[0] === "wrb.fr" && typeof item[2] === "string") {
+                                            const body2 = JSON.parse(item[2]);
+                                            if (Array.isArray(body2) && Array.isArray(body2[2])) {
+                                                return body2[2].map(c => ({
+                                                    cid: c[0],
+                                                    ts: (Array.isArray(c[5]) && c[5][0]) ? (Number(c[5][0]) + (c[5][1] || 0) / 1e9) : 0,
+                                                }));
+                                            }
+                                        }
+                                    }
+                                } catch (_) {}
+                            }
+                        } catch (_) {}
+                        return [];
+                    };
+                    const a = await listChats(1);
+                    const b = await listChats(0);
+                    const seen = {};
+                    for (const c of [...a, ...b]) if (c.cid && !seen[c.cid]) seen[c.cid] = c;
+                    return Object.values(seen);
+                },
+                { at: snlm0e, batchUrl: BATCHEXECUTE_URL }
+            );
+
+            let deleted = 0;
+            for (const chat of chats) {
+                if (!chat.cid || !chat.cid.startsWith("c_")) continue;
+                if (chat.ts <= 0 || chat.ts >= cutoffSec) continue;
+                const ok = await this.deleteGeminiWebConversation(authIndex, chat.cid, snlm0e);
+                if (ok) deleted++;
+                // Slight delay to avoid rate-limiting
+                await new Promise(r => setTimeout(r, 300));
+            }
+
+            if (deleted > 0) {
+                this.logger.info(`[GeminiWeb#${authIndex}] Periodic cleanup: deleted ${deleted} old conversations`);
+            }
+        } catch (e) {
+            this.logger.warn(`[GeminiWeb#${authIndex}] cleanupGeminiWebConversations error: ${e.message}`);
+        } finally {
+            try { await tmpPage.close(); } catch (_) {}
+        }
     }
 }
 

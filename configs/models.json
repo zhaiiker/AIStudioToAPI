@@ -461,6 +461,42 @@
             "inputTokenLimit": 480,
             "outputTokenLimit": 8192,
             "supportedGenerationMethods": ["predict"]
-        }
-    ]
+        },
+  {
+    "name": "gemini-web/gemini-3.1-pro",
+    "displayName": "Gemini 3.1 Pro (Web)",
+    "source": "gemini-web",
+    "description": "Gemini 3.1 Pro via Gemini Web interface. Supports image generation."
+  },
+  {
+    "name": "gemini-web/gemini-3.6-flash",
+    "displayName": "Gemini 3.6 Flash (Web)",
+    "source": "gemini-web",
+    "description": "Gemini 3.6 Flash via Gemini Web interface. Fast, capable, supports image generation."
+  },
+  {
+    "name": "gemini-web/gemini-3.6-flash-thinking",
+    "displayName": "Gemini 3.6 Flash Thinking (Web)",
+    "source": "gemini-web",
+    "description": "Gemini 3.6 Flash with extended thinking via Gemini Web interface."
+  },
+  {
+    "name": "gemini-web/gemini-3.1-pro-advanced",
+    "displayName": "Gemini 3.1 Pro Advanced (Web)",
+    "source": "gemini-web",
+    "description": "Gemini 3.1 Pro Advanced tier. Requires Google One subscription."
+  },
+  {
+    "name": "gemini-web/gemini-3.6-flash-advanced",
+    "displayName": "Gemini 3.6 Flash Advanced (Web)",
+    "source": "gemini-web",
+    "description": "Gemini 3.6 Flash Advanced tier. Requires Google One subscription."
+  },
+  {
+    "name": "gemini-web/gemini-3.6-flash-thinking-advanced",
+    "displayName": "Gemini 3.6 Flash Thinking Advanced (Web)",
+    "source": "gemini-web",
+    "description": "Gemini 3.6 Flash Thinking Advanced tier. Requires Google One subscription."
+  }
+]
 }

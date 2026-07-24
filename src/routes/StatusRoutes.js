@@ -942,7 +942,7 @@ class StatusRoutes {
                     successCount,
                 });
             } catch (error) {
-                this.logger.error(`[WebUI] Batch upload failed: ${error.message}`);
+            this.logger.error(`[WebUI] Batch upload failed: ${error.message}`);
                 res.status(500).json({ error: "Failed to upload files" });
             }
         });
@@ -958,6 +958,60 @@ class StatusRoutes {
                 return res.status(404).json({ error: "File not found" });
             }
             res.download(filePath);
+        });
+
+        // ─── Gemini Web endpoints ──────────────────────────────────────────────
+
+        /**
+         * GET /api/gemini-web/status
+         * Returns Gemini Web availability status for each account context.
+         */
+        app.get("/api/gemini-web/status", isAuthenticated, (req, res) => {
+            const { browserManager, authSource } = this.serverSystem;
+            const statusList = [];
+
+            for (const [authIdx, contextData] of browserManager.contexts) {
+                const accountName = authSource?.accountNameMap?.get(authIdx) || null;
+                statusList.push({
+                    authIndex: authIdx,
+                    accountName,
+                    hasGeminiWebToken: !!contextData.geminiSnlM0e,
+                    tokenRefreshedAt: contextData.geminiSnlM0eRefreshedAt
+                        ? new Date(contextData.geminiSnlM0eRefreshedAt).toISOString()
+                        : null,
+                    geminiWebAvailable:
+                        !!contextData.geminiSnlM0e &&
+                        !!contextData.geminiWebPage &&
+                        !contextData.geminiWebPage.isClosed(),
+                });
+            }
+
+            res.json({ accounts: statusList });
+        });
+
+        /**
+         * GET /gemini-web/images/:id
+         * Serve locally-stored AI-generated images.
+         * Path-traversal protection is enforced inside getImagePath().
+         */
+        app.get("/gemini-web/images/:id", (req, res) => {
+            const { id } = req.params;
+            // Use the GeminiWebClient from RequestHandler (already instantiated)
+            const geminiWebClient = this.serverSystem.requestHandler?.geminiWebClient;
+            if (!geminiWebClient) {
+                return res.status(503).json({ error: "Gemini Web client not initialized" });
+            }
+            const imgPath = geminiWebClient.getImagePath(id);
+            if (!imgPath) {
+                return res.status(404).json({ error: "Image not found" });
+            }
+            // Determine content type from extension
+            const ext = id.split(".").pop().toLowerCase();
+            const mimeMap = { png: "image/png", jpg: "image/jpeg", webp: "image/webp", gif: "image/gif" };
+            const mime = mimeMap[ext] || "image/png";
+            res.setHeader("Content-Type", mime);
+            res.setHeader("Cache-Control", "public, max-age=86400"); // cache 1 day
+            res.sendFile(imgPath);
         });
     }
 

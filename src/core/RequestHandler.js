@@ -11,6 +11,7 @@
  */
 const AuthSwitcher = require("../auth/AuthSwitcher");
 const FormatConverter = require("./FormatConverter");
+const GeminiWebClient = require("./GeminiWebClient");
 const { isUserAbortedError } = require("../utils/CustomErrors");
 const { QueueClosedError, QueueTimeoutError } = require("../utils/MessageQueue");
 
@@ -35,6 +36,7 @@ class RequestHandler {
         // Initialize sub-modules
         this.authSwitcher = new AuthSwitcher(logger, config, authSource, browserManager);
         this.formatConverter = new FormatConverter(logger, serverSystem);
+        this.geminiWebClient = new GeminiWebClient(logger);
 
         this.needsSwitchingAfterRequest = false;
 
@@ -1132,6 +1134,16 @@ class RequestHandler {
 
     // Process OpenAI format requests
     async processOpenAIRequest(req, res) {
+        const requestedModel = req.body?.model;
+
+        // ─── Gemini Web routing ─────────────────────────────────────────────
+        // Intercept any gemini-web/* model before the normal AI Studio flow.
+        // These requests are handled entirely via Playwright browser fetch.
+        if (this.geminiWebClient.isGeminiWebModel(requestedModel)) {
+            return this._handleGeminiWebRequest(req, res);
+        }
+        // ───────────────────────────────────────────────────────────────────
+
         const requestId = this._generateRequestId();
         this._startTrackedRequest(requestId, req, {
             apiFormat: "openai",
@@ -4384,6 +4396,258 @@ class RequestHandler {
 
     _generateRequestAttemptId(requestId, attemptNumber) {
         return `${requestId}_attempt_${attemptNumber}_${Math.random().toString(36).substring(2, 8)}`;
+    }
+
+    // ─── Gemini Web Request Handler ──────────────────────────────────────────────
+
+    /**
+     * Handle requests to gemini-web/* models.
+     * All HTTP calls are executed via Playwright browser fetch (avoids Google bot detection).
+     *
+     * @param {import('express').Request} req
+     * @param {import('express').Response} res
+     */
+    async _handleGeminiWebRequest(req, res) {
+        const requestId = this._generateRequestId();
+        const modelName = req.body?.model || "gemini-web/gemini-3.6-flash";
+        const resolvedModel = this.geminiWebClient.resolveModel(modelName);
+
+        if (!resolvedModel) {
+            return res.status(400).json({
+                error: { message: `Unknown Gemini Web model: ${modelName}` },
+            });
+        }
+
+        const authIndex = this.currentAuthIndex;
+        const contextData = this.browserManager.contexts.get(authIndex);
+
+        // Check that Gemini Web tab is available
+        if (!contextData?.geminiSnlM0e) {
+            this.logger.warn(`[GeminiWeb] SNlM0e token not available for account #${authIndex}`);
+            return res.status(503).json({
+                error: {
+                    message:
+                        "Gemini Web not available for this account. " +
+                        "The SNlM0e token has not been acquired yet. Please wait for browser initialization.",
+                },
+            });
+        }
+
+        // Refresh token if needed (non-blocking if fresh)
+        await this.browserManager._maybeRefreshGeminiWebToken(authIndex);
+        const snlm0e = this.browserManager.contexts.get(authIndex)?.geminiSnlM0e || "";
+
+        // Parse input
+        const messages = req.body?.messages || [];
+        const prompt = this.geminiWebClient.buildPromptFromMessages(messages);
+        const isStreaming = req.body?.stream === true;
+        const isImageGen = this.geminiWebClient.isImageIntent(prompt);
+
+        // Build request parameters
+        const { url, headers } = this.geminiWebClient.buildRequestParams(resolvedModel, snlm0e);
+        const formData = this.geminiWebClient.buildFormData(prompt, resolvedModel, snlm0e);
+
+        // Track request
+        this._startTrackedRequest(requestId, req, {
+            apiFormat: "gemini-web",
+            isStreaming,
+            model: modelName,
+            requestCategory: "generation",
+        });
+
+        try {
+            if (!isStreaming || isImageGen) {
+                // ── Buffered mode: non-streaming or image generation ──────────────
+                // Image generation must buffer the full response (images arrive in last frame)
+                let rawBuf = "";
+                let streamError = null;
+
+                await this.browserManager.executeGeminiWebRequest(
+                    authIndex,
+                    { url, formData, headers },
+                    (chunk) => {
+                        if (chunk === null) return; // stream end signal
+                        if (typeof chunk === "string" && chunk.startsWith("ERROR:")) {
+                            streamError = chunk.slice(6);
+                        } else {
+                            rawBuf += chunk;
+                        }
+                    }
+                );
+
+                if (streamError) {
+                    this._finalizeTrackedRequest(requestId, res, { outcome: "error", errorMessage: streamError });
+                    return res.status(502).json({ error: { message: streamError } });
+                }
+
+                const parsed = this.geminiWebClient.parseOutput(rawBuf);
+
+                // Download and store any generated images
+                if (parsed.images && parsed.images.length > 0) {
+                    const downloaded = [];
+                    for (const img of parsed.images) {
+                        const imgData = await this.browserManager.downloadImageViaPage(authIndex, img.url);
+                        if (imgData) {
+                            try {
+                                const id = this.geminiWebClient.saveImage(imgData.b64, imgData.mime);
+                                downloaded.push({ id, mime: imgData.mime, url: `/gemini-web/images/${id}` });
+                            } catch (e) {
+                                this.logger.warn(`[GeminiWeb] Failed to save image: ${e.message}`);
+                            }
+                        }
+                    }
+
+                    if (downloaded.length > 0) {
+                        const protocol = req.protocol;
+                        const host = req.headers.host;
+                        const mdImages = downloaded
+                            .map(i => `![generated image](${protocol}://${host}${i.url})`)
+                            .join("\n");
+                        parsed.text = (mdImages + "\n" + (parsed.text || "")).trim();
+                    }
+
+                    parsed.images = downloaded;
+                }
+
+                // Fire-and-forget conversation deletion (prevent history accumulation)
+                if (parsed.conversationId) {
+                    this.browserManager
+                        .deleteGeminiWebConversation(authIndex, parsed.conversationId, snlm0e)
+                        .catch(e => this.logger.warn(`[GeminiWeb] Delete conv failed: ${e.message}`));
+                }
+
+                const responseBody = this._buildGeminiWebOpenAIResponse(parsed, modelName, false);
+                this._finalizeTrackedRequest(requestId, res, {});
+                return res.json(responseBody);
+            } else {
+                // ── True streaming mode (text-only conversations) ─────────────────
+                res.setHeader("Content-Type", "text/event-stream");
+                res.setHeader("Cache-Control", "no-cache");
+                res.setHeader("Connection", "keep-alive");
+                res.setHeader("X-Accel-Buffering", "no");
+
+                const completionId = `chatcmpl-gw-${Date.now()}`;
+
+                // Send role frame
+                this._writeSSE(res, {
+                    id: completionId,
+                    object: "chat.completion.chunk",
+                    model: modelName,
+                    choices: [{ index: 0, delta: { role: "assistant" }, finish_reason: null }],
+                });
+
+                let buf = "";
+                let emitted = "";
+                let lastConvId = "";
+                let streamError = null;
+
+                await this.browserManager.executeGeminiWebRequest(
+                    authIndex,
+                    { url, formData, headers },
+                    (chunk) => {
+                        if (chunk === null) return; // stream end signal
+                        if (typeof chunk === "string" && chunk.startsWith("ERROR:")) {
+                            streamError = chunk.slice(6);
+                            return;
+                        }
+                        buf += chunk;
+                        const { frames, consumed } = this.geminiWebClient.scanWrbFrames(buf);
+                        if (consumed) buf = buf.slice(consumed);
+
+                        for (const frame of frames) {
+                            const { text, convId } = this.geminiWebClient.extractTextFromWrb(frame);
+                            if (convId) lastConvId = convId;
+                            if (text === null) continue;
+
+                            const safe = this.geminiWebClient.filterImagePlaceholders(text);
+                            if (safe.length > emitted.length && safe.startsWith(emitted)) {
+                                const delta = safe.slice(emitted.length);
+                                emitted = safe;
+                                this._writeSSE(res, {
+                                    id: completionId,
+                                    object: "chat.completion.chunk",
+                                    model: modelName,
+                                    choices: [{ index: 0, delta: { content: delta }, finish_reason: null }],
+                                });
+                            }
+                        }
+                    }
+                );
+
+                // Send finish frame
+                this._writeSSE(res, {
+                    id: completionId,
+                    object: "chat.completion.chunk",
+                    model: modelName,
+                    choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+                });
+                res.write("data: [DONE]\n\n");
+                res.end();
+
+                // Fire-and-forget conversation deletion
+                if (lastConvId) {
+                    this.browserManager
+                        .deleteGeminiWebConversation(authIndex, lastConvId, snlm0e)
+                        .catch(e => this.logger.warn(`[GeminiWeb] Delete conv failed: ${e.message}`));
+                }
+
+                const outcome = streamError ? "error" : "success";
+                this._finalizeTrackedRequest(requestId, res, { outcome });
+            }
+        } catch (e) {
+            this.logger.error(`[GeminiWeb] Request failed: ${e.message}`);
+            this._finalizeTrackedRequest(requestId, res, { outcome: "error", errorMessage: e.message });
+            if (!res.writableEnded) {
+                res.status(500).json({ error: { message: e.message } });
+            }
+        }
+    }
+
+    /**
+     * Write a Server-Sent Events chunk to the response.
+     * @param {import('express').Response} res
+     * @param {object} data
+     */
+    _writeSSE(res, data) {
+        if (!res.writableEnded) {
+            res.write(`data: ${JSON.stringify(data)}\n\n`);
+        }
+    }
+
+    /**
+     * Build an OpenAI-compatible chat completion response from Gemini Web parsed output.
+     * @param {{ text: string, conversationId: string, images: Array }} parsed
+     * @param {string} modelName
+     * @param {boolean} isStreaming
+     * @returns {object}
+     */
+    _buildGeminiWebOpenAIResponse(parsed, modelName, isStreaming) {
+        const completionId = `chatcmpl-gw-${Date.now()}`;
+        const text = parsed.text || "";
+
+        if (isStreaming) {
+            return {
+                choices: [{ delta: { content: text, role: "assistant" }, finish_reason: "stop", index: 0 }],
+                id: completionId,
+                model: modelName,
+                object: "chat.completion.chunk",
+            };
+        }
+
+        return {
+            choices: [
+                {
+                    finish_reason: "stop",
+                    index: 0,
+                    message: { content: text, role: "assistant" },
+                },
+            ],
+            created: Math.floor(Date.now() / 1000),
+            id: completionId,
+            model: modelName,
+            object: "chat.completion",
+            usage: { completion_tokens: -1, prompt_tokens: -1, total_tokens: -1 },
+        };
     }
 }
 
