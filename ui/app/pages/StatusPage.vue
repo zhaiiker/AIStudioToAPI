@@ -2732,8 +2732,23 @@
                             <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
                             {{ t('gwIsolatedContextDesc') }}
                         </span>
-                        <button class="btn-icon" :title="t('gwRefresh')" @click="fetchGeminiWebStatus">
-                            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24"
+                        <button
+                            class="btn-icon"
+                            :title="t('gwRefresh')"
+                            style="
+                                padding: 8px 14px;
+                                border-radius: 8px;
+                                background: var(--bg-card);
+                                border: 1px solid var(--border-light);
+                                cursor: pointer;
+                                display: flex;
+                                align-items: center;
+                                gap: 6px;
+                                color: var(--text-primary);
+                            "
+                            @click="fetchGeminiWebStatus"
+                        >
+                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24"
                                 fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
                                 stroke-linejoin="round">
                                 <path d="M23 4v6h-6"></path>
@@ -2741,7 +2756,7 @@
                                 <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10"></path>
                                 <path d="M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
                             </svg>
-                            {{ t('gwRefresh') }}
+                            <span style="font-size: 0.9rem; font-weight: 500">{{ t('gwRefresh') }}</span>
                         </button>
                     </div>
                 </header>
