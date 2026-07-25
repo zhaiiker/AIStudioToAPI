@@ -2724,50 +2724,73 @@
 
             <!-- GEMINI WEB VIEW -->
             <div v-if="activeTab === 'gemini-web'" class="view-container">
-                <header class="page-header">
-                    <h1>Gemini Web</h1>
-                    <button class="btn-icon" title="Refresh status" @click="fetchGeminiWebStatus">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24"
-                            fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
-                            stroke-linejoin="round">
-                            <path d="M23 4v6h-6"></path>
-                            <path d="M1 20v-6h6"></path>
-                            <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10"></path>
-                            <path d="M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
-                        </svg>
-                        Refresh
-                    </button>
+                <header class="page-header" style="display: flex; justify-content: space-between; align-items: center">
+                    <h1>{{ t('gwTitle') }}</h1>
+                    <div style="display: flex; align-items: center; gap: 12px">
+                        <!-- Isolated Context badge -->
+                        <span style="display: inline-flex; align-items: center; gap: 6px; padding: 4px 12px; border-radius: 20px; font-size: 12px; background: rgba(34,197,94,0.12); color: var(--success-color, #22c55e); border: 1px solid rgba(34,197,94,0.25)">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+                            {{ t('gwIsolatedContextDesc') }}
+                        </span>
+                        <button class="btn-icon" :title="t('gwRefresh')" @click="fetchGeminiWebStatus">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24"
+                                fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                                stroke-linejoin="round">
+                                <path d="M23 4v6h-6"></path>
+                                <path d="M1 20v-6h6"></path>
+                                <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10"></path>
+                                <path d="M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+                            </svg>
+                            {{ t('gwRefresh') }}
+                        </button>
+                    </div>
                 </header>
 
+                <!-- Summary cards -->
                 <div class="stats-dashboard-grid" style="margin-bottom: 24px">
+                    <!-- Available Accounts -->
                     <section class="status-card summary-card-visual">
                         <div class="stat-icon-wrapper" style="background: var(--primary-light, rgba(59,130,246,0.1)); color: var(--primary-color, #3b82f6)">
                             <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>
                         </div>
                         <div class="stat-info">
-                            <div class="stat-label-muted">Available Accounts</div>
+                            <div class="stat-label-muted">{{ t('gwAvailableAccounts') }}</div>
                             <div class="stat-value-large">
-                                <span class="status-running" style="margin-right: 4px;">{{ geminiWebAccounts.filter(a => a.geminiWebAvailable).length }}</span>
-                                <span style="font-size: 14px; color: var(--text-secondary);">/ {{ geminiWebAccounts.length }}</span>
+                                <span class="status-running" style="margin-right: 4px">{{ geminiWebAccounts.filter(a => a.geminiWebAvailable).length }}</span>
+                                <span style="font-size: 14px; color: var(--text-secondary)">/ {{ geminiWebAccounts.length }}</span>
                             </div>
                         </div>
                     </section>
+                    <!-- Supported Models -->
                     <section class="status-card summary-card-visual">
                         <div class="stat-icon-wrapper" style="background: var(--purple-light, rgba(168,85,247,0.1)); color: var(--purple-color, #a855f7)">
                             <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 14 4-4"></path><path d="M3.34 19a10 10 0 1 1 17.32 0"></path></svg>
                         </div>
                         <div class="stat-info">
-                            <div class="stat-label-muted">Supported Models</div>
+                            <div class="stat-label-muted">{{ t('gwSupportedModels') }}</div>
                             <div class="stat-value-large">{{ geminiWebModelCount }}</div>
                         </div>
                     </section>
+                    <!-- Isolated Context Status -->
+                    <section class="status-card summary-card-visual">
+                        <div class="stat-icon-wrapper" style="background: rgba(34,197,94,0.1); color: var(--success-color, #22c55e)">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+                        </div>
+                        <div class="stat-info">
+                            <div class="stat-label-muted">{{ t('gwContextStatus') }}</div>
+                            <div class="stat-value-large" style="font-size: 14px; margin-top: 8px; font-weight: 600">
+                                {{ geminiWebAccounts.filter(a => a.geminiWebAvailable).length > 0 ? t('gwStatusIsolated') : '—' }}
+                            </div>
+                        </div>
+                    </section>
+                    <!-- Image Store -->
                     <section class="status-card summary-card-visual">
                         <div class="stat-icon-wrapper" style="background: var(--warning-light, rgba(245,158,11,0.1)); color: var(--warning-color, #f59e0b)">
                             <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2" ry="2"></rect><circle cx="9" cy="9" r="2"></circle><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"></path></svg>
                         </div>
                         <div class="stat-info">
-                            <div class="stat-label-muted">Image Store</div>
-                            <div class="stat-value-large" style="font-size: 14px; margin-top: 8px; font-weight: normal; font-family: monospace;">/gemini-web/images/:id</div>
+                            <div class="stat-label-muted">{{ t('gwImageStore') }}</div>
+                            <div class="stat-value-large" style="font-size: 13px; margin-top: 8px; font-weight: normal; font-family: monospace; color: var(--text-secondary)">/gemini-web/images/:id</div>
                         </div>
                     </section>
                 </div>
@@ -2775,19 +2798,23 @@
                 <!-- Account status table -->
                 <section class="status-card records-card" style="margin-bottom: 24px">
                     <div class="card-header-v2">
-                        <h3 class="card-title-usage">Account Status</h3>
+                        <h3 class="card-title-usage">{{ t('gwAccountStatus') }}</h3>
+                        <span v-if="geminiWebAccounts.length > 0" style="font-size: 12px; color: var(--text-secondary)">
+                            {{ geminiWebAccounts.length }} {{ t('account') }}
+                        </span>
                     </div>
                     <div v-if="geminiWebAccounts.length === 0" class="empty-state">
-                        No browser contexts initialized yet.
+                        {{ t('gwNoBrowserContext') }}
                     </div>
                     <div v-else class="table-scroll-wrapper records-scroll-wrapper" style="max-height: 400px">
                         <table class="data-table fixed-header-table">
                             <thead>
                                 <tr>
-                                    <th>#</th>
-                                    <th>Account</th>
-                                    <th>Gemini Web</th>
-                                    <th>Token Acquired</th>
+                                    <th style="width: 60px">#</th>
+                                    <th>{{ t('gwAccount') }}</th>
+                                    <th>{{ t('gwGeminiWeb') }}</th>
+                                    <th>{{ t('gwContextMode') }}</th>
+                                    <th>{{ t('gwTokenAcquired') }}</th>
                                 </tr>
                             </thead>
                             <tbody>
@@ -2796,13 +2823,20 @@
                                     <td>{{ acc.accountName || '—' }}</td>
                                     <td>
                                         <span v-if="acc.geminiWebAvailable" class="outcome-badge" style="color: var(--success-color, #22c55e); background: var(--success-color-light, rgba(34,197,94,0.15))">
-                                            Ready
+                                            ✓ {{ t('gwStatusReady') }}
                                         </span>
                                         <span v-else-if="acc.hasGeminiWebToken" class="outcome-badge" style="color: var(--warning-color, #f59e0b); background: var(--warning-light, rgba(245,158,11,0.15))">
-                                            Tab Closed
+                                            ⚠ {{ t('gwStatusPending') }}
                                         </span>
                                         <span v-else class="outcome-badge" style="color: var(--text-secondary); background: var(--bg-secondary)">
-                                            Not Available
+                                            {{ t('gwStatusNotAvailable') }}
+                                        </span>
+                                    </td>
+                                    <td>
+                                        <!-- geminiWebContext is always isolated now (风控修复后始终独立) -->
+                                        <span class="outcome-badge" style="color: var(--success-color, #22c55e); background: rgba(34,197,94,0.12); display: inline-flex; align-items: center; gap: 4px">
+                                            <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+                                            {{ t('gwStatusIsolated') }}
                                         </span>
                                     </td>
                                     <td class="mono">{{ acc.tokenRefreshedAt ? new Date(acc.tokenRefreshedAt).toLocaleString() : '—' }}</td>
@@ -2814,24 +2848,43 @@
 
                 <!-- Model list -->
                 <section class="status-card wide-card">
-                    <div class="card-header-v2" style="border-bottom: none; padding-bottom: 0;">
-                        <h3 class="card-title-usage">Supported Models (gemini-web/*)</h3>
+                    <div class="card-header-v2" style="border-bottom: none; padding-bottom: 0">
+                        <h3 class="card-title-usage">{{ t('gwSupportedModelsTitle') }}</h3>
                     </div>
-                    <div style="padding: 20px;">
-                        <div style="display: flex; flex-wrap: wrap; gap: 8px">
+                    <div style="padding: 20px">
+                        <div style="display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 20px">
                             <span
                                 v-for="m in geminiWebModels"
                                 :key="m"
-                                style="padding: 4px 12px; border-radius: 6px; font-size: 13px; font-family: monospace; background: var(--bg-secondary); color: var(--text-primary); border: 1px solid var(--border-light)"
+                                :style="{
+                                    padding: '5px 12px',
+                                    borderRadius: '6px',
+                                    fontSize: '12px',
+                                    fontFamily: 'monospace',
+                                    background: m.includes('thinking') ? 'rgba(168,85,247,0.1)' : m.includes('pro') ? 'rgba(59,130,246,0.1)' : 'var(--bg-secondary)',
+                                    color: m.includes('thinking') ? 'var(--purple-color, #a855f7)' : m.includes('pro') ? 'var(--primary-color, #3b82f6)' : 'var(--text-primary)',
+                                    border: '1px solid ' + (m.includes('thinking') ? 'rgba(168,85,247,0.25)' : m.includes('pro') ? 'rgba(59,130,246,0.25)' : 'var(--border-light)'),
+                                    transition: 'opacity 0.15s',
+                                    cursor: 'default',
+                                }"
                             >{{ m }}</span>
                         </div>
-                        <div style="margin-top: 20px; padding: 16px; border-radius: 8px; background: var(--bg-secondary); font-size: 13px; color: var(--text-secondary); line-height: 1.5">
-                            <strong style="color: var(--text-primary)">Usage:</strong> Send OpenAI-compatible requests to <code style="background:var(--bg-card);padding:2px 6px;border-radius:4px;border:1px solid var(--border-light)">/v1/chat/completions</code> with <code style="background:var(--bg-card);padding:2px 6px;border-radius:4px;border:1px solid var(--border-light)">model: "gemini-web/gemini-3.6-flash"</code>.<br>
-                            Requests are routed through the logged-in Google browser session — no API key required from Google.
+                        <div style="padding: 16px; border-radius: 8px; background: var(--bg-secondary); font-size: 13px; color: var(--text-secondary); line-height: 1.7; border: 1px solid var(--border-light)">
+                            <div style="display: flex; align-items: flex-start; gap: 8px">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-top: 2px; flex-shrink: 0; color: var(--primary-color, #3b82f6)"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
+                                <div>
+                                    <strong style="color: var(--text-primary)">{{ t('gwUsageHint') }}：</strong>
+                                    {{ t('gwUsageDesc', {
+                                        endpoint: '/v1/chat/completions',
+                                        model: 'gemini-web/gemini-3.6-flash'
+                                    }) }}
+                                </div>
+                            </div>
                         </div>
                     </div>
                 </section>
             </div>
+
 
             <!-- LOGS VIEW -->
             <div v-if="activeTab === 'logs'" class="view-container logs-view-container">
