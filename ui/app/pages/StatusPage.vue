@@ -2747,52 +2747,53 @@
                 </header>
 
                 <!-- Summary cards -->
-                <div class="stats-dashboard-grid" style="margin-bottom: 24px">
+                <div class="stats-grid-v2" style="margin-bottom: 24px; gap: 20px">
                     <!-- Available Accounts -->
-                    <section class="status-card summary-card-visual">
-                        <div class="stat-icon-wrapper" style="background: var(--primary-light, rgba(59,130,246,0.1)); color: var(--primary-color, #3b82f6)">
+                    <section class="stats-card-v2">
+                        <div class="card-icon is-primary" style="background: var(--primary-light, rgba(59,130,246,0.1)); color: var(--primary-color, #3b82f6); border-radius: 10px; width: 44px; height: 44px; display: flex; align-items: center; justify-content: center; flex-shrink: 0">
                             <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>
                         </div>
-                        <div class="stat-info">
-                            <div class="stat-label-muted">{{ t('gwAvailableAccounts') }}</div>
-                            <div class="stat-value-large">
+                        <div class="card-info">
+                            <span class="stats-label">{{ t('gwAvailableAccounts') }}</span>
+                            <span class="stats-value">
                                 <span class="status-running" style="margin-right: 4px">{{ geminiWebAccounts.filter(a => a.geminiWebAvailable).length }}</span>
-                                <span style="font-size: 14px; color: var(--text-secondary)">/ {{ geminiWebAccounts.length }}</span>
-                            </div>
+                                <span style="font-size: 16px; color: var(--text-secondary); font-weight: 500">/ {{ geminiWebAccounts.length }}</span>
+                            </span>
                         </div>
                     </section>
                     <!-- Supported Models -->
-                    <section class="status-card summary-card-visual">
-                        <div class="stat-icon-wrapper" style="background: var(--purple-light, rgba(168,85,247,0.1)); color: var(--purple-color, #a855f7)">
+                    <section class="stats-card-v2">
+                        <div class="card-icon" style="background: var(--purple-light, rgba(168,85,247,0.1)); color: var(--purple-color, #a855f7); border-radius: 10px; width: 44px; height: 44px; display: flex; align-items: center; justify-content: center; flex-shrink: 0">
                             <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 14 4-4"></path><path d="M3.34 19a10 10 0 1 1 17.32 0"></path></svg>
                         </div>
-                        <div class="stat-info">
-                            <div class="stat-label-muted">{{ t('gwSupportedModels') }}</div>
-                            <div class="stat-value-large">{{ geminiWebModelCount }}</div>
+                        <div class="card-info">
+                            <span class="stats-label">{{ t('gwSupportedModels') }}</span>
+                            <span class="stats-value">{{ geminiWebModelCount }}</span>
                         </div>
                     </section>
                     <!-- Isolated Context Status -->
-                    <section class="status-card summary-card-visual">
-                        <div class="stat-icon-wrapper" style="background: rgba(34,197,94,0.1); color: var(--success-color, #22c55e)">
+                    <section class="stats-card-v2">
+                        <div class="card-icon" style="background: rgba(34,197,94,0.1); color: var(--success-color, #22c55e); border-radius: 10px; width: 44px; height: 44px; display: flex; align-items: center; justify-content: center; flex-shrink: 0">
                             <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
                         </div>
-                        <div class="stat-info">
-                            <div class="stat-label-muted">{{ t('gwContextStatus') }}</div>
-                            <div class="stat-value-large" style="font-size: 14px; margin-top: 8px; font-weight: 600">
+                        <div class="card-info">
+                            <span class="stats-label">{{ t('gwContextStatus') }}</span>
+                            <span class="stats-value" style="font-size: 1.1rem">
                                 {{ geminiWebAccounts.filter(a => a.geminiWebAvailable).length > 0 ? t('gwStatusIsolated') : '—' }}
-                            </div>
+                            </span>
                         </div>
                     </section>
                     <!-- Image Store -->
-                    <section class="status-card summary-card-visual">
-                        <div class="stat-icon-wrapper" style="background: var(--warning-light, rgba(245,158,11,0.1)); color: var(--warning-color, #f59e0b)">
+                    <section class="stats-card-v2">
+                        <div class="card-icon" style="background: var(--warning-light, rgba(245,158,11,0.1)); color: var(--warning-color, #f59e0b); border-radius: 10px; width: 44px; height: 44px; display: flex; align-items: center; justify-content: center; flex-shrink: 0">
                             <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2" ry="2"></rect><circle cx="9" cy="9" r="2"></circle><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"></path></svg>
                         </div>
-                        <div class="stat-info">
-                            <div class="stat-label-muted">{{ t('gwImageStore') }}</div>
-                            <div class="stat-value-large" style="font-size: 13px; margin-top: 8px; font-weight: normal; font-family: monospace; color: var(--text-secondary)">/gemini-web/images/:id</div>
+                        <div class="card-info">
+                            <span class="stats-label">{{ t('gwImageStore') }}</span>
+                            <span class="stats-value" style="font-size: 0.85rem; font-family: monospace; font-weight: 500; letter-spacing: 0">/gemini-web/images/:id</span>
                         </div>
                     </section>
+
                 </div>
 
                 <!-- Account status table -->
