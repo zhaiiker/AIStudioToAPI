@@ -4451,9 +4451,12 @@ class RequestHandler {
         const isImageGen = this.geminiWebClient.isImageIntent(prompt);
         const requiresBuffering = isImageGen || hasTools;
 
-        // Build request parameters
-        const { url, headers } = this.geminiWebClient.buildRequestParams(resolvedModel, snlm0e);
+        // Build request parameters; pass the real browser UA so the fetch header matches
+        // the Camoufox UA exactly (avoids detectable UA mismatch in Google's risk control)
+        const realUA = this.browserManager.contexts.get(authIndex)?.geminiWebUA || "";
+        const { url, headers } = this.geminiWebClient.buildRequestParams(resolvedModel, snlm0e, realUA);
         const formData = this.geminiWebClient.buildFormData(prompt, resolvedModel, snlm0e);
+
 
         // Track request
         this._startTrackedRequest(requestId, req, {

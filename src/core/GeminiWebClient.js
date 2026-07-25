@@ -305,8 +305,12 @@ Example (plain text reply):
     /**
      * Build the complete { url, formData, headers } request params object
      * for use with BrowserManager.executeGeminiWebRequest().
+     *
+     * @param {string} resolvedModelName
+     * @param {string} snlm0e
+     * @param {string} [userAgent] - Real UA read from the browser page (overrides hardcoded default)
      */
-    buildRequestParams(resolvedModelName, snlm0e) {
+    buildRequestParams(resolvedModelName, snlm0e, userAgent = "") {
         const encoded = this.encodePayload("", resolvedModelName); // prompt added in handler
         const reqId = String(Math.floor(100000 + Math.random() * 900000));
 
@@ -320,13 +324,18 @@ Example (plain text reply):
 
         const url = `${GENERATE_URL}?${params.toString()}`;
 
+        // Use the real UA captured from the browser when available.
+        // A mismatch between the fetch() User-Agent header and the browser's actual UA
+        // is a detectable anomaly that can contribute to Google risk-control signals.
+        const resolvedUA = userAgent ||
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:120.0) Gecko/20100101 Firefox/120.0";
+
         const headers = {
             "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
             "X-Same-Domain": "1",
             Referer: "https://gemini.google.com/",
             Origin: "https://gemini.google.com",
-            "User-Agent":
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:120.0) Gecko/20100101 Firefox/120.0",
+            "User-Agent": resolvedUA,
         };
 
         // Merge model headers

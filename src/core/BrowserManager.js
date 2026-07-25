@@ -1075,23 +1075,25 @@ class BrowserManager {
             }
         }, 4000);
 
-        // Gemini Web: refresh SNlM0e token every 30 minutes
+        // Gemini Web: refresh SNlM0e token every 2 hours
+        // (Reduced from 30 min — fewer reloads = fewer Google risk-control signals)
         setInterval(async () => {
             try {
                 await this._maybeRefreshGeminiWebToken(authIndex, true);
             } catch (e) {
                 this.logger.warn(`[GeminiWeb#${authIndex}] Token refresh error: ${e.message}`);
             }
-        }, 30 * 60 * 1000);
+        }, 2 * 60 * 60 * 1000);
 
-        // Gemini Web: periodic chat cleanup every hour (catches any leaked conversations)
+        // Gemini Web: periodic chat cleanup every 4 hours (catches any leaked conversations)
+        // (Reduced from 1 hour — fewer batchexecute calls = lower risk-control signal)
         setInterval(async () => {
             try {
                 await this.cleanupGeminiWebConversations(authIndex, 1);
             } catch (e) {
                 this.logger.warn(`[GeminiWeb#${authIndex}] Cleanup error: ${e.message}`);
             }
-        }, 60 * 60 * 1000);
+        }, 4 * 60 * 60 * 1000);
     }
 
     /**
@@ -2211,7 +2213,11 @@ class BrowserManager {
                     healthMonitorInterval: null,
                     page,
                     // Gemini Web integration fields
+                    // geminiWebContext is a SEPARATE BrowserContext from context, sharing same cookies
+                    // but isolated so Google cannot detect concurrent session usage on two products
+                    geminiWebContext: null,
                     geminiWebPage: null,
+                    geminiWebUA: "",
                     geminiSnlM0e: "",
                     geminiSnlM0eRefreshedAt: 0,
                 });
@@ -2652,6 +2658,19 @@ class BrowserManager {
             this.logger.info(`[Browser] Stopped health monitor for context #${authIndex}`);
         }
 
+        // Close the isolated Gemini Web context (separate from AI Studio context)
+        if (contextData.geminiWebContext) {
+            try {
+                await contextData.geminiWebContext.close();
+                this.logger.info(`[Browser] Gemini Web isolated context #${authIndex} closed.`);
+            } catch (e) {
+                this.logger.warn(`[Browser] Error closing Gemini Web context #${authIndex}: ${e.message}`);
+            }
+            contextData.geminiWebContext = null;
+            contextData.geminiWebPage = null;
+            contextData.geminiWebUA = "";
+        }
+
         // Remove from contexts map FIRST, before closing context
         // This ensures that when context.close() triggers WebSocket disconnect,
         // _removeConnection will see that the context is already gone and skip reconnect logic
@@ -2704,12 +2723,19 @@ class BrowserManager {
      * Called when browser is closing or has disconnected
      */
     _cleanupAllContexts() {
-        // Clean up all context health monitors
+        // Clean up all context health monitors and Gemini Web isolated contexts
         for (const [authIndex, contextData] of this.contexts.entries()) {
             if (contextData.healthMonitorInterval) {
                 clearInterval(contextData.healthMonitorInterval);
                 contextData.healthMonitorInterval = null;
                 this.logger.info(`[Browser] Stopped health monitor for context #${authIndex}`);
+            }
+            // Best-effort close of isolated Gemini Web context
+            if (contextData.geminiWebContext) {
+                contextData.geminiWebContext.close().catch(() => { });
+                contextData.geminiWebContext = null;
+                contextData.geminiWebPage = null;
+                contextData.geminiWebUA = "";
             }
         }
 
@@ -2775,21 +2801,69 @@ class BrowserManager {
     // ─── Gemini Web Integration ───────────────────────────────────────────────
 
     /**
-     * Open a persistent Gemini Web Tab in the BrowserContext to extract the SNlM0e
-     * session token and keep Google cookies alive.
+     * Open a persistent Gemini Web Tab in an ISOLATED BrowserContext to extract the SNlM0e
+     * session token. Using a separate context (not shared with AI Studio) prevents Google
+     * from detecting that the same session cookie is simultaneously accessing two products
+     * (AI Studio + Gemini Web), which would trigger account risk controls.
+     *
+     * The isolated context loads cookies from the same auth file so it is still authenticated,
+     * but from Google's server-side view the two tab groups look like separate browser instances.
+     *
      * Called asynchronously after _initializeContext (non-blocking).
      */
     async _initGeminiWebTab(authIndex) {
         const contextData = this.contexts.get(authIndex);
         if (!contextData || !contextData.context) return;
 
+        // Close any existing Gemini Web context first to avoid leaks
+        if (contextData.geminiWebContext) {
+            try {
+                await contextData.geminiWebContext.close();
+            } catch (_) { }
+            contextData.geminiWebContext = null;
+            contextData.geminiWebPage = null;
+            contextData.geminiWebUA = "";
+        }
+
         try {
-            const geminiPage = await contextData.context.newPage();
+            // Load the same cookies from auth source so the separate context is authenticated
+            const storageStateObject = this.authSource.getAuth(authIndex);
+            if (!storageStateObject) {
+                this.logger.warn(`[GeminiWeb#${authIndex}] Cannot init: auth data not available`);
+                return;
+            }
+
+            // Get proxy config (same as AI Studio context)
+            const stickyProxy = this.stickyProxyManager.getProxyForAuth(authIndex);
+            const proxyConfig = stickyProxy ? stickyProxy.proxy : parseProxyFromEnv();
+
+            // Slightly randomised viewport so the two contexts don't share identical fingerprints
+            const randomWidth = 1366 + Math.floor(Math.random() * 100);
+            const randomHeight = 768 + Math.floor(Math.random() * 50);
+
+            // Create a SEPARATE BrowserContext — isolated from the AI Studio context
+            const geminiWebContext = await this.browser.newContext({
+                deviceScaleFactor: 1,
+                storageState: storageStateObject,
+                viewport: { height: randomHeight, width: randomWidth },
+                ...(proxyConfig ? { proxy: proxyConfig } : {}),
+            });
+
+            contextData.geminiWebContext = geminiWebContext;
+
+            const geminiPage = await geminiWebContext.newPage();
             await geminiPage.goto("https://gemini.google.com/app?hl=en", {
                 timeout: 60000,
                 waitUntil: "domcontentloaded",
             });
             await geminiPage.waitForTimeout(2000);
+
+            // Read the real User-Agent from the browser so requests match exactly
+            const realUA = await geminiPage.evaluate(() => navigator.userAgent).catch(() => "");
+            if (realUA) {
+                contextData.geminiWebUA = realUA;
+                this.logger.debug(`[GeminiWeb#${authIndex}] Real UA captured: ${realUA}`);
+            }
 
             const html = await geminiPage.content();
             const tokenMatch = html.match(/"SNlM0e":"([^"]+)"/);
@@ -2797,14 +2871,23 @@ class BrowserManager {
             if (tokenMatch) {
                 contextData.geminiSnlM0e = tokenMatch[1];
                 contextData.geminiSnlM0eRefreshedAt = Date.now();
-                contextData.geminiWebPage = geminiPage; // keep tab open to maintain cookie activity
-                this.logger.info(`[GeminiWeb#${authIndex}] ✅ SNlM0e token acquired`);
+                contextData.geminiWebPage = geminiPage; // keep tab open
+                this.logger.info(`[GeminiWeb#${authIndex}] ✅ SNlM0e token acquired (isolated context)`);
             } else {
                 this.logger.warn(`[GeminiWeb#${authIndex}] ⚠️ SNlM0e token not found in page, Gemini Web unavailable`);
                 await geminiPage.close().catch(() => { });
+                await geminiWebContext.close().catch(() => { });
+                contextData.geminiWebContext = null;
             }
         } catch (e) {
             this.logger.warn(`[GeminiWeb#${authIndex}] _initGeminiWebTab error: ${e.message}`);
+            // Best-effort cleanup on failure
+            if (contextData.geminiWebContext) {
+                try { await contextData.geminiWebContext.close(); } catch (_) { }
+                contextData.geminiWebContext = null;
+                contextData.geminiWebPage = null;
+                contextData.geminiWebUA = "";
+            }
         }
     }
 
@@ -2818,7 +2901,8 @@ class BrowserManager {
         if (!contextData) return;
 
         const ageMs = Date.now() - (contextData.geminiSnlM0eRefreshedAt || 0);
-        const REFRESH_INTERVAL_MS = 30 * 60 * 1000;
+        // Token TTL: 2 hours (was 30 min — reduced frequency lowers Google risk-control signals)
+        const REFRESH_INTERVAL_MS = 2 * 60 * 60 * 1000;
         if (!force && ageMs < REFRESH_INTERVAL_MS) return;
 
         try {
@@ -2833,12 +2917,15 @@ class BrowserManager {
                 if (tokenMatch) {
                     contextData.geminiSnlM0e = tokenMatch[1];
                     contextData.geminiSnlM0eRefreshedAt = Date.now();
+                    // Also refresh the real UA in case it changed after reload
+                    const realUA = await contextData.geminiWebPage.evaluate(() => navigator.userAgent).catch(() => "");
+                    if (realUA) contextData.geminiWebUA = realUA;
                     this.logger.info(`[GeminiWeb#${authIndex}] ✅ SNlM0e token refreshed`);
                 } else {
                     this.logger.warn(`[GeminiWeb#${authIndex}] ⚠️ Token refresh: SNlM0e not found after reload`);
                 }
             } else {
-                // Re-initialize if tab was closed
+                // Re-initialize if tab or context was closed
                 await this._initGeminiWebTab(authIndex);
             }
         } catch (e) {
